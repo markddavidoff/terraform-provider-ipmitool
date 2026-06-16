@@ -1,0 +1,30 @@
+# Decrypted secrets + transient tempfiles — never commit
+secrets/*.env
+!secrets/*.enc.env
+!secrets/*.env.example
+secrets/*.yaml
+!secrets/*.enc.yaml
+secrets/.*
+*.pem
+*.key
+.env
+
+# Built provider binary
+terraform-provider-ipmitool
+terraform-provider-ipmitool_*
+
+# Go
+*.test
+*.out
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+
+# Operator / local dev artifacts — not part of the public repo
+RESUME.md
+.claude/settings.local.json

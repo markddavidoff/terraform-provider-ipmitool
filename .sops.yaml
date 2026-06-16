@@ -1,0 +1,6 @@
+creation_rules:
+  # Matches both the encrypted file (secrets/idrac.enc.env) and the transient
+  # plaintext working copy (secrets/idrac.env) that scripts create + delete.
+  # Plaintext is excluded from git via .gitignore — never committed.
+  - path_regex: secrets/.*\.(env|yaml|json)$
+    age: age1exvvtktjvexwuc9js4p82rqxtxf60pqw9msn5fqs8yfcz9tphees443j9d

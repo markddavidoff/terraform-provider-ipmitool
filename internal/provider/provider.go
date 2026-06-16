@@ -1,0 +1,172 @@
+// Package provider wires up the Terraform Plugin Framework provider type,
+// schema, and Configure step. Resource and data-source registration
+// happens here too once the first Tier 1 resource lands.
+package provider
+
+import (
+	"context"
+	"fmt"
+	"os/exec"
+
+	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/path"
+	"github.com/hashicorp/terraform-plugin-framework/provider"
+	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/types"
+
+	"github.com/markddavidoff/terraform-provider-ipmitool/internal/ipmi"
+)
+
+// New is the factory the plugin server calls.
+func New(version string) func() provider.Provider {
+	return func() provider.Provider {
+		return &ipmiProvider{version: version}
+	}
+}
+
+type ipmiProvider struct {
+	version string
+}
+
+// providerConfigModel mirrors the provider block schema for tfsdk decode.
+type providerConfigModel struct {
+	Host           types.String `tfsdk:"host"`
+	Username       types.String `tfsdk:"username"`
+	Password       types.String `tfsdk:"password"`
+	Port           types.Int64  `tfsdk:"port"`
+	Interface      types.String `tfsdk:"interface"`
+	CipherSuite    types.Int64  `tfsdk:"cipher_suite"`
+	TimeoutSeconds types.Int64  `tfsdk:"timeout_seconds"`
+}
+
+func (p *ipmiProvider) Metadata(_ context.Context, _ provider.MetadataRequest, resp *provider.MetadataResponse) {
+	resp.TypeName = "ipmi"
+	resp.Version = p.version
+}
+
+func (p *ipmiProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
+	resp.Schema = schema.Schema{
+		Description: "Manage BMC/iDRAC hardware via IPMI 2.0 (LAN+) by wrapping the ipmitool CLI.\n\n" +
+			"Resources can override any of these fields per-host for multi-BMC fleets.",
+		Attributes: map[string]schema.Attribute{
+			"host": schema.StringAttribute{
+				Optional:    true,
+				Description: "Default BMC IP or hostname. Resources may override.",
+			},
+			"username": schema.StringAttribute{
+				Optional:    true,
+				Description: "Default IPMI username.",
+			},
+			"password": schema.StringAttribute{
+				Optional:    true,
+				Sensitive:   true,
+				Description: "Default IPMI password.",
+			},
+			"port": schema.Int64Attribute{
+				Optional:    true,
+				Description: "Default IPMI UDP port. Defaults to 623.",
+			},
+			"interface": schema.StringAttribute{
+				Optional:    true,
+				Description: "ipmitool interface: lanplus (default), lan, or open.",
+			},
+			"cipher_suite": schema.Int64Attribute{
+				Optional: true,
+				Description: "RMCP+ cipher suite ID. Defaults to 3 (RAKP-HMAC-SHA1) for " +
+					"compatibility with older Dell 11G BMCs. Set to 17 on modern hardware.",
+			},
+			"timeout_seconds": schema.Int64Attribute{
+				Optional: true,
+				Description: "Per-call timeout for ipmitool subprocess. Defaults to 60s — " +
+					"older BMCs are slow on `sdr list` (full SDR iteration).",
+			},
+		},
+	}
+}
+
+// Configure detects ipmitool in PATH and stashes a ClientFactory for
+// resources / data sources to consume.
+func (p *ipmiProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
+	binaryPath, err := exec.LookPath("ipmitool")
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"ipmitool not found in PATH",
+			"This provider wraps the ipmitool CLI. Install it:\n"+
+				"  macOS:   brew install ipmitool\n"+
+				"  Debian:  apt install ipmitool\n"+
+				"  RHEL:    dnf install ipmitool\n"+
+				"  Alpine:  apk add ipmitool\n"+
+				"  Windows: install WSL2 then apt install ipmitool inside WSL2",
+		)
+		return
+	}
+
+	var data providerConfigModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	iface := "lanplus"
+	if !data.Interface.IsNull() && !data.Interface.IsUnknown() {
+		iface = data.Interface.ValueString()
+		switch iface {
+		case "lanplus", "lan", "open":
+		default:
+			resp.Diagnostics.AddAttributeError(
+				path.Root("interface"),
+				"invalid interface",
+				fmt.Sprintf("got %q; want one of lanplus, lan, open", iface),
+			)
+			return
+		}
+	}
+
+	factory := &ipmi.ClientFactory{
+		IpmitoolPath: binaryPath,
+		Defaults: ipmi.ConnectionParams{
+			Host:        data.Host.ValueString(),
+			Username:    data.Username.ValueString(),
+			Password:    data.Password.ValueString(),
+			Port:        intOr(data.Port, 623),
+			Interface:   iface,
+			CipherSuite: intOr(data.CipherSuite, 3),
+			TimeoutSecs: intOr(data.TimeoutSeconds, 60),
+		},
+	}
+
+	resp.DataSourceData = factory
+	resp.ResourceData = factory
+}
+
+// Resources / DataSources are empty until the first Tier 1 resource lands.
+func (p *ipmiProvider) Resources(_ context.Context) []func() resource.Resource {
+	return []func() resource.Resource{
+		NewPowerResource,
+		NewBootDeviceResource,
+		NewUserResource,
+		NewChannelAccessResource,
+		NewLanResource,
+		NewWatchdogResource,
+		NewChassisIdentifyResource,
+		NewSOLResource,
+	}
+}
+
+func (p *ipmiProvider) DataSources(_ context.Context) []func() datasource.DataSource {
+	return []func() datasource.DataSource{
+		NewChassisStatusDataSource,
+		NewBMCInfoDataSource,
+		NewFRUDataSource,
+		NewSELDataSource,
+		NewSensorsDataSource,
+	}
+}
+
+func intOr(v types.Int64, def int) int {
+	if v.IsNull() || v.IsUnknown() {
+		return def
+	}
+	return int(v.ValueInt64())
+}

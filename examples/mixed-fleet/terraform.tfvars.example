@@ -1,0 +1,32 @@
+# Copy to terraform.tfvars and fill in real connection details for the public
+# (non-sensitive) bits. Passwords come from a secret manager — set
+# TF_VAR_fleet_passwords from sops-decrypted env, never commit them.
+#
+# Note: terraform.tfvars is gitignored; .example files are not.
+
+fleet = {
+  r210ii = {
+    host         = "192.0.2.10"
+    username     = "root"
+    cipher_suite = 3
+  }
+  r220-a = {
+    host         = "192.0.2.11"
+    username     = "root"
+    cipher_suite = 3
+  }
+  r220-b = {
+    host         = "192.0.2.12"
+    username     = "root"
+    cipher_suite = 3
+  }
+}
+
+# fleet_passwords should be set via TF_VAR_fleet_passwords (HCL-encoded map).
+# Example (do NOT commit this with real passwords):
+#
+# export TF_VAR_fleet_passwords='{
+#   r210ii  = "real-password-here"
+#   "r220-a" = "real-password-here"
+#   "r220-b" = "real-password-here"
+# }'
