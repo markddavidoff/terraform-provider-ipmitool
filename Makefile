@@ -33,6 +33,10 @@ testacc: ## Run acceptance tests against real BMC (needs $(SECRETS_FILE), TF_ACC
 tidy: ## go mod tidy
 	@go mod tidy
 
+.PHONY: docs
+docs: ## Regenerate Registry docs from schema descriptions (tfplugindocs)
+	@go generate ./...
+
 .PHONY: install-local
 install-local: build ## Install the provider to ~/.terraform.d for local TF testing
 	@mkdir -p ~/.terraform.d/plugins/registry.terraform.io/$(PROVIDER_NAMESPACE)/$(PROVIDER_NAME)/$(PROVIDER_VERSION)/$(PLUGIN_OS_ARCH)

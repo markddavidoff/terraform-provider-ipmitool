@@ -2,6 +2,8 @@
 // BMC hardware via IPMI 2.0 (LAN+) by wrapping the ipmitool CLI.
 package main
 
+//go:generate go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs generate --provider-name ipmi --rendered-provider-name ipmitool
+
 import (
 	"context"
 	"flag"

@@ -143,6 +143,7 @@ Tested end-to-end against:
 
 - **Dell PowerEdge R210 II** with the bare integrated BMC (no iDRAC
   Express/Enterprise card), firmware 1.90, cipher suite 3.
+- **Dell iDRAC 7 Enterprise**, firmware 2.21, cipher suite 3.
 
 Known limitations:
 
