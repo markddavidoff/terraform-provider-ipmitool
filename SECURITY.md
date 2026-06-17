@@ -25,8 +25,8 @@ patched.
 All releases are GPG-signed. Verify before trusting downloaded artifacts:
 
 - **Key type:** RSA-4096
-- **Fingerprint:** `E594 3F5A C012 46F7 580C  A1AB A513 4C39 9336 2031`
-- **Uid:** `Mark Davidoff (terraform-provider-ipmitool release key) <markddavidoff@gmail.com>`
+- **Fingerprint:** `CFFA 81ED F77A 943B 74FE  42D5 0B99 E1BA 1894 B507`
+- **Uid:** `Mark Davidoff (terraform-provider-ipmitool release key v2) <markddavidoff@gmail.com>`
 
 Verify a downloaded release archive:
 
