@@ -42,7 +42,7 @@ set -euo pipefail
 # The release key. If this is ever rotated, bump here AND in SECURITY.md
 # AND in the Terraform Registry's GPG keys list AND the GH Actions
 # GPG_PRIVATE_KEY / PASSPHRASE secrets.
-RELEASE_KEY=CFFA81EDF77A943B74FE42D50B99E1BA1894B507
+RELEASE_KEY=CFFA81EDF77A943B74FE42D50B99E1BA1894B507  # gitleaks:allow (GPG public-key fingerprint, also in SECURITY.md)
 
 if [[ $# -ne 1 ]]; then
     cat >&2 <<EOF
