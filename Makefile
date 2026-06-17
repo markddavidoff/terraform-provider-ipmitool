@@ -9,7 +9,7 @@ help:
 
 PROVIDER_NAMESPACE := markddavidoff
 PROVIDER_NAME      := ipmitool
-PROVIDER_VERSION   := 0.1.0-dev
+PROVIDER_VERSION   := 0.1.0
 PROVIDER_BINARY    := terraform-provider-$(PROVIDER_NAME)
 PLUGIN_OS_ARCH     := $(shell go env GOOS)_$(shell go env GOARCH)
 

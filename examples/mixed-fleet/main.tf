@@ -12,7 +12,7 @@ terraform {
   required_providers {
     ipmi = {
       source  = "markddavidoff/ipmitool"
-      version = "0.1.0-dev"
+      version = "~> 0.1"
     }
   }
 }

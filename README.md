@@ -11,8 +11,8 @@ to fill the gap where Dell's own
 doesn't reach — older Dell 11G hardware (R210 II, R610, R710) that
 predates Redfish.
 
-> **Status:** Tier 1 (v0.1.0-dev). Working end-to-end against a Dell
-> R210 II bare BMC. Not yet published to the Terraform Registry.
+> **Status:** v0.1.0. Verified end-to-end against a Dell R210 II bare
+> BMC and a Dell iDRAC 7 Enterprise.
 
 ## Why a new provider
 
