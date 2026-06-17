@@ -102,6 +102,24 @@ output "power_state" {
 }
 ```
 
+## Managing BMC credentials
+
+`password = var.bmc_password` in a `.tfvars` is the obvious
+starting point and the wrong long-term default — BMC creds end up in
+state. Source them through SOPS, Vault, or env vars instead. See
+[Managing BMC credentials in the provider docs](docs/index.md#managing-bmc-credentials)
+for working examples.
+
+## Security & network requirements
+
+IPMI must live on an isolated management VLAN. The Terraform runner
+needs UDP/623 to each BMC; nothing else should. Use cipher 17 wherever
+supported, keep BMC passwords ≥ 20 chars, and treat state-file access
+as equivalent to BMC root. See
+[Security & network requirements in the provider docs](docs/index.md#security--network-requirements)
+for the full threat model including CVE-2013-4786 (RAKP hash
+disclosure).
+
 ## Resources
 
 | Resource | Purpose |
@@ -134,9 +152,11 @@ plan-time lockout guards that block self-destructive applies:
 - Disabling LAN access on channel 1
 - Changing the BMC's IP, switching to DHCP, or changing VLAN on channel 1
 
-Each blocked plan errors with a clear message and the remedy:
-`force_lockout_risk = true`. Setting that attribute downgrades the
-error to a warning so you can opt in explicitly.
+Each blocked plan errors with a clear message and the remedy: set
+`TF_IPMI_ALLOW_LOCKOUT=1` in the runner environment to bypass the
+guard for that apply. The bypass is operational (per-apply) rather
+than declarative (in `.tf`), so it can't be accidentally left set
+across runs. Every bypass emits a `tflog.Warn` for the SIEM trail.
 
 ## Multi-host fleets
 
@@ -174,6 +194,14 @@ Tested end-to-end against:
 
 Known limitations:
 
+- **Non-Dell hardware is best-effort.** The `splitColumns` parser in
+  `client_ipmitool.go` was verified against Dell R210 II and iDRAC 7
+  output formats only. SuperMicro X9/X10/X11 and AsRock Rack BMCs ship
+  the same upstream `ipmitool` but vendor BMC firmware varies in
+  column layout for `user list` and similar. If you hit parse failures
+  on non-Dell hardware, open an issue with the raw output of
+  `ipmitool user list 1` / `ipmitool lan print 1` and we'll add a
+  fixture.
 - **Dell 11G bare BMC rejects remote `Set User Name`** — the
   `ipmi_user` resource works correctly on conforming BMCs (SuperMicro,
   AsRock Rack, etc.) but Dell 11G requires RACADM for user CRUD.
