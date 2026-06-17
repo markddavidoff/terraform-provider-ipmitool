@@ -33,6 +33,32 @@ testacc: ## Run acceptance tests against real BMC (needs $(SECRETS_FILE), TF_ACC
 tidy: ## go mod tidy
 	@go mod tidy
 
+## --- ci gates ---
+
+.PHONY: ci
+ci: vet staticcheck test vulncheck gitleaks docs-validate ## Run all PR-time gates (matches the CI workflow)
+
+.PHONY: vet
+vet: ## go vet ./...
+	@go vet ./...
+
+.PHONY: staticcheck
+staticcheck: ## staticcheck ./...
+	@go run honnef.co/go/tools/cmd/staticcheck ./...
+
+.PHONY: vulncheck
+vulncheck: ## govulncheck ./...
+	@go run golang.org/x/vuln/cmd/govulncheck ./...
+
+.PHONY: gitleaks
+gitleaks: ## Scan for committed secrets (requires gitleaks installed)
+	@command -v gitleaks >/dev/null 2>&1 || { echo "gitleaks not installed — brew install gitleaks"; exit 1; }
+	@gitleaks detect --source . --redact --verbose --no-banner
+
+.PHONY: docs-validate
+docs-validate: ## Validate Registry docs match schema
+	@go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs validate
+
 .PHONY: docs
 docs: ## Regenerate Registry docs from schema descriptions (tfplugindocs)
 	@go generate ./...
