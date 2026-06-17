@@ -69,6 +69,11 @@ install-local: build ## Install the provider to ~/.terraform.d for local TF test
 	@cp $(PROVIDER_BINARY) ~/.terraform.d/plugins/registry.terraform.io/$(PROVIDER_NAMESPACE)/$(PROVIDER_NAME)/$(PROVIDER_VERSION)/$(PLUGIN_OS_ARCH)/
 	@echo "installed → ~/.terraform.d/plugins/registry.terraform.io/$(PROVIDER_NAMESPACE)/$(PROVIDER_NAME)/$(PROVIDER_VERSION)/$(PLUGIN_OS_ARCH)/"
 
+.PHONY: release-tag
+release-tag: ## Sign + push a release tag (bypasses pinentry, prompts for passphrase). Usage: make release-tag VERSION=v0.3.0
+	@test -n "$(VERSION)" || { echo "Usage: make release-tag VERSION=v0.3.0" >&2; exit 2; }
+	@./scripts/release-tag.sh "$(VERSION)"
+
 .PHONY: detect-cipher
 detect-cipher: ## Probe a BMC for the highest-supported RMCP+ cipher. Usage: make detect-cipher HOST=... USER=... [PASS=...]
 	@echo ""
