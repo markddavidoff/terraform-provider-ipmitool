@@ -60,6 +60,14 @@ signs:
       - "--detach-sign"
       - "${artifact}"
 
+# SBOM generation via the built-in Syft integration. Produces one
+# .spdx.json per archive; uploaded alongside the zips by the release
+# step so adopters can scan with Trivy / Snyk / etc.
+sboms:
+  - artifacts: archive
+    documents:
+      - "${artifact}.spdx.json"
+
 release:
   extra_files:
     - glob: 'terraform-registry-manifest.json'
