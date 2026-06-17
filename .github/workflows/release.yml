@@ -1,12 +1,13 @@
 # Tag-driven release workflow.
 #
 # Triggered when a tag matching `v*` is pushed:
-#   git tag -s v0.1.0 -m "v0.1.0"
+#   git tag -a v0.1.0 -m "v0.1.0"
 #   git push origin v0.1.0
 #
 # Requires repo secrets (Settings → Secrets → Actions):
-#   GPG_PRIVATE_KEY   the ASCII-armored private key (gpg --armor --export-secret-keys $FINGERPRINT)
-#   PASSPHRASE        the GPG key passphrase (empty string if none)
+#   GPG_PRIVATE_KEY   ASCII-armored, passphrase-encrypted private key
+#                     (gpg --armor --export-secret-keys $FINGERPRINT)
+#   PASSPHRASE        the GPG key passphrase
 #
 # The fingerprint is derived from the imported key at runtime — no extra secret needed.
 
@@ -24,26 +25,26 @@ jobs:
   goreleaser:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: 'go.mod'
           cache: true
 
       - name: Import GPG key
         id: import_gpg
-        uses: crazy-max/ghaction-import-gpg@v6
+        uses: crazy-max/ghaction-import-gpg@v7
         with:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.PASSPHRASE }}
 
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
-          version: latest
+          version: '~> v2'
           args: release --clean
         env:
           GPG_FINGERPRINT: ${{ steps.import_gpg.outputs.fingerprint }}

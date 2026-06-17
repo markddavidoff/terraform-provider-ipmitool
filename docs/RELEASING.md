@@ -10,22 +10,51 @@ End-to-end checklist for cutting a release that lands on the
 The Registry requires releases to be signed with a GPG key whose public
 key is registered on your account.
 
+> **Important:** the Registry rejects ECC keys (GPG's interactive
+> default in recent versions). The batch config below pins `Key-Type:
+> RSA` so you don't accidentally generate an unusable key.
+
+Generate a strong random passphrase, then the key:
+
 ```bash
-gpg --full-generate-key \
-    --batch <<EOF
-%no-protection
+# 1. Random passphrase, mode-600 so it doesn't leak via $HISTFILE.
+mkdir -p ~/.gnupg/release-key-bootstrap
+chmod 700 ~/.gnupg/release-key-bootstrap
+umask 077
+openssl rand -base64 32 | tr -d '\n' \
+  > ~/.gnupg/release-key-bootstrap/passphrase.txt
+
+# 2. Generate the key, pinned to RSA-4096 with a dedicated identity.
+PASS=$(cat ~/.gnupg/release-key-bootstrap/passphrase.txt)
+cat > ~/.gnupg/release-key-bootstrap/keygen.conf <<EOF
 Key-Type: RSA
 Key-Length: 4096
 Name-Real: Mark Davidoff
+Name-Comment: terraform-provider-ipmitool release key
 Name-Email: markddavidoff@gmail.com
 Expire-Date: 0
+Passphrase: $PASS
 %commit
 EOF
+chmod 600 ~/.gnupg/release-key-bootstrap/keygen.conf
+gpg --batch --generate-key ~/.gnupg/release-key-bootstrap/keygen.conf
+rm ~/.gnupg/release-key-bootstrap/keygen.conf
 ```
 
-(Adjust name/email. `%no-protection` makes the key passphrase-less,
-which is friendlier for CI; if you'd rather use a passphrase, remove
-that line and set the `PASSPHRASE` repo secret.)
+Why a passphrase: a passphrase-less key means the `GPG_PRIVATE_KEY`
+GitHub Actions secret IS the full key — anything that exfiltrates the
+secret can sign forged releases. With a passphrase, an attacker needs
+both `GPG_PRIVATE_KEY` and `PASSPHRASE`. In the CI runtime attack
+model these are coupled (both load into the same job's env), but the
+passphrase materially helps against leaks via other channels (lost
+laptop, accidental gist, cross-CI-platform migration).
+
+**Save the passphrase to your password manager immediately**:
+
+```bash
+cat ~/.gnupg/release-key-bootstrap/passphrase.txt
+# → copy → 1Password / pass / Keychain
+```
 
 Get the fingerprint:
 
@@ -33,17 +62,26 @@ Get the fingerprint:
 gpg --list-secret-keys --keyid-format=long
 ```
 
-Export the public key:
+Export the public key (you'll paste this on the Registry):
 
 ```bash
-gpg --armor --export <FINGERPRINT> > release-key.pub
+gpg --armor --export <FINGERPRINT> > ~/.gnupg/release-key-bootstrap/public-key.asc
 ```
 
-### 2. Register the public key on Terraform Cloud
+Export the passphrase-encrypted private key (for the GH Actions secret):
 
-1. Sign in to https://app.terraform.io/.
-2. Settings → User Profile → GPG Signing Keys → New GPG Signing Key.
-3. Paste the contents of `release-key.pub`.
+```bash
+gpg --batch --pinentry-mode loopback \
+    --passphrase "$(cat ~/.gnupg/release-key-bootstrap/passphrase.txt)" \
+    --armor --export-secret-keys <FINGERPRINT> \
+  > ~/.gnupg/release-key-bootstrap/private-key.asc
+```
+
+### 2. Register the public key on the Terraform Registry
+
+1. Sign in to https://registry.terraform.io/sign-in (GitHub OAuth).
+2. https://registry.terraform.io/settings/gpg-keys → New GPG Signing Key.
+3. Paste the contents of `~/.gnupg/release-key-bootstrap/public-key.asc`.
 
 ### 3. Make the repo public
 
@@ -53,51 +91,83 @@ Registry publishing requires a public GitHub repo:
 gh repo edit markddavidoff/terraform-provider-ipmitool --visibility public
 ```
 
-### 4. Add CI secrets (if releasing via GitHub Actions)
+### 4. Add CI secrets
 
-In the repo → Settings → Secrets and variables → Actions → New repository secret:
+Set both directly from the bootstrap files (no copy-paste of secret material):
 
-- `GPG_PRIVATE_KEY` — `gpg --armor --export-secret-keys <FINGERPRINT>`
-- `PASSPHRASE` — empty string if you used `%no-protection` above
+```bash
+REPO=markddavidoff/terraform-provider-ipmitool
+gh secret set GPG_PRIVATE_KEY --repo $REPO \
+  < ~/.gnupg/release-key-bootstrap/private-key.asc
+gh secret set PASSPHRASE      --repo $REPO \
+  < ~/.gnupg/release-key-bootstrap/passphrase.txt
+gh secret list --repo $REPO   # confirm both present
+```
 
-### 5. Publish the provider on the Registry
+### 5. Shred the bootstrap dir
+
+The key is now in your local `~/.gnupg/` keyring and on GitHub as
+secrets. The bootstrap dir served its purpose; shred it:
+
+```bash
+find ~/.gnupg/release-key-bootstrap -type f -exec sh -c \
+  'dd if=/dev/urandom of="$1" bs=1024 count=8 2>/dev/null; rm -f "$1"' _ {} \;
+rmdir ~/.gnupg/release-key-bootstrap
+```
+
+To re-export the public key later (e.g., for a different repo):
+`gpg --armor --export <FINGERPRINT>`.
+
+### 6. Publish the provider on the Registry
 
 1. https://registry.terraform.io/publish/provider
-2. Pick the GitHub repo `markddavidoff/terraform-provider-ipmitool`.
-3. The Registry watches for `v*` tags and pulls release artifacts.
+2. Select `markddavidoff/terraform-provider-ipmitool`.
+3. Category: **Infrastructure (IaaS)** — matches `dell/redfish`,
+   `equinix/metal`, `tinkerbell/tinkerbell`.
+4. The Registry watches for `v*` tags and pulls release artifacts.
 
 ## Per-release flow
 
-### Option A — release locally
+### Option A — release via GitHub Actions (recommended)
+
+```bash
+git tag -a v0.1.0 -m "v0.1.0 — initial release"
+git push origin v0.1.0
+```
+
+The `.github/workflows/release.yml` workflow takes it from there
+(builds the 12 OS/arch matrix, signs `SHA256SUMS`, uploads the
+release). Typically completes in ~5 minutes.
+
+Watch the run:
+
+```bash
+gh run watch --repo markddavidoff/terraform-provider-ipmitool \
+  --workflow release.yml --exit-status
+```
+
+### Option B — release locally
 
 ```bash
 # 1. Make sure tests are green.
 make test
 make testacc          # if you have a BMC handy
 
-# 2. Tag.
-git tag -s v0.1.0 -m "v0.1.0"
+# 2. Tag + push.
+git tag -a v0.1.0 -m "v0.1.0"
 git push origin v0.1.0
 
-# 3. Run GoReleaser.
+# 3. Run GoReleaser. The GPG agent will prompt for the passphrase
+#    unless you've loopback-imported the key non-interactively.
 export GPG_FINGERPRINT=<your fingerprint>
 goreleaser release --clean
 ```
-
-### Option B — release via GitHub Actions
-
-```bash
-git tag -s v0.1.0 -m "v0.1.0"
-git push origin v0.1.0
-```
-
-The `.github/workflows/release.yml` workflow takes it from there.
 
 ## What gets shipped
 
 GoReleaser builds and uploads to a GitHub Release:
 
-- `terraform-provider-ipmitool_v0.1.0_<os>_<arch>.zip` for each
+- `terraform-provider-ipmitool_0.1.0_<os>_<arch>.zip` for each
   freebsd/windows/linux/darwin × amd64/arm/arm64/386 combo
   (with some exclusions — darwin/386 and darwin/arm don't exist)
 - `terraform-provider-ipmitool_0.1.0_SHA256SUMS` — checksums of every zip
