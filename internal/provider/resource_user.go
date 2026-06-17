@@ -33,14 +33,13 @@ type userModel struct {
 	Interface   types.String `tfsdk:"interface"`
 	CipherSuite types.Int64  `tfsdk:"cipher_suite"`
 
-	UserID            types.Int64  `tfsdk:"user_id"`
-	Name              types.String `tfsdk:"name"`
-	UserPassword      types.String `tfsdk:"user_password"`
-	Privilege         types.String `tfsdk:"privilege"`
-	Enabled           types.Bool   `tfsdk:"enabled"`
-	Channel           types.Int64  `tfsdk:"channel"`
-	ForceLockoutRisk  types.Bool   `tfsdk:"force_lockout_risk"`
-	ID                types.String `tfsdk:"id"`
+	UserID       types.Int64  `tfsdk:"user_id"`
+	Name         types.String `tfsdk:"name"`
+	UserPassword types.String `tfsdk:"user_password"`
+	Privilege    types.String `tfsdk:"privilege"`
+	Enabled      types.Bool   `tfsdk:"enabled"`
+	Channel      types.Int64  `tfsdk:"channel"`
+	ID           types.String `tfsdk:"id"`
 }
 
 func (r *userResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -52,7 +51,7 @@ func (r *userResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 		Description: "Manage one IPMI user slot (typically slots 1–15). Includes a " +
 			"self-disable guard: if the user being modified matches the connection " +
 			"`username` and the plan would disable the slot, apply errors unless " +
-			"`force_lockout_risk = true` is set.\n\n" +
+			"`TF_IPMI_ALLOW_LOCKOUT=1` is set in the runner environment for the apply.\n\n" +
 			"**Note:** `user_password` is write-only — the BMC does not return it on " +
 			"reads, so the provider cannot detect out-of-band password changes.",
 		Attributes: map[string]schema.Attribute{
@@ -100,12 +99,7 @@ func (r *userResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 				Computed:    true,
 				Description: "Channel number this privilege applies to. Default 1.",
 			},
-			"force_lockout_risk": schema.BoolAttribute{
-				Optional: true,
-				Description: "Set to true to override lockout-safety errors when the plan would " +
-					"disable the connection user (which would lock Terraform out of the BMC).",
-			},
-			"id":           schema.StringAttribute{Computed: true},
+			"id": schema.StringAttribute{Computed: true},
 		},
 	}
 }
@@ -127,8 +121,8 @@ func (r *userResource) Configure(_ context.Context, req resource.ConfigureReques
 //
 // The check compares the resource's `name` field against the connection
 // `username` (provider default merged with per-resource override). If
-// they match AND the plan disables the slot, the apply requires an
-// explicit force_lockout_risk = true opt-in.
+// they match AND the plan disables the slot, the apply requires
+// TF_IPMI_ALLOW_LOCKOUT=1 in the runner environment.
 func (r *userResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
 	if r.factory == nil || req.Plan.Raw.IsNull() {
 		// Nothing to check on destroy plan.
@@ -153,7 +147,8 @@ func (r *userResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRe
 			resourceName,
 		),
 	}
-	resp.Diagnostics.Append(enforceLockoutGuards(plan.ForceLockoutRisk, []lockoutCheck{selfDisable})...)
+	merged := r.factory.Defaults.Merge(r.overrideFromPlan(plan))
+	resp.Diagnostics.Append(enforceLockoutGuards(ctx, "ipmi_user", merged.Host, []lockoutCheck{selfDisable})...)
 }
 
 // connectionUser returns the username the BMC connection will use,

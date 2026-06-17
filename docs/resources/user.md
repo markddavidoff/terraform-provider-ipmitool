@@ -3,13 +3,13 @@
 page_title: "ipmi_user Resource - ipmi"
 subcategory: ""
 description: |-
-  Manage one IPMI user slot (typically slots 1–15). Includes a self-disable guard: if the user being modified matches the connection username and the plan would disable the slot, apply errors unless force_lockout_risk = true is set.
+  Manage one IPMI user slot (typically slots 1–15). Includes a self-disable guard: if the user being modified matches the connection username and the plan would disable the slot, apply errors unless TF_IPMI_ALLOW_LOCKOUT=1 is set in the runner environment for the apply.
   Note: user_password is write-only — the BMC does not return it on reads, so the provider cannot detect out-of-band password changes.
 ---
 
 # ipmi_user (Resource)
 
-Manage one IPMI user slot (typically slots 1–15). Includes a self-disable guard: if the user being modified matches the connection `username` and the plan would disable the slot, apply errors unless `force_lockout_risk = true` is set.
+Manage one IPMI user slot (typically slots 1–15). Includes a self-disable guard: if the user being modified matches the connection `username` and the plan would disable the slot, apply errors unless `TF_IPMI_ALLOW_LOCKOUT=1` is set in the runner environment for the apply.
 
 **Note:** `user_password` is write-only — the BMC does not return it on reads, so the provider cannot detect out-of-band password changes.
 
@@ -30,7 +30,6 @@ Manage one IPMI user slot (typically slots 1–15). Includes a self-disable guar
 - `channel` (Number) Channel number this privilege applies to. Default 1.
 - `cipher_suite` (Number)
 - `enabled` (Boolean) Whether the user slot is enabled. Default true.
-- `force_lockout_risk` (Boolean) Set to true to override lockout-safety errors when the plan would disable the connection user (which would lock Terraform out of the BMC).
 - `host` (String)
 - `interface` (String)
 - `password` (String, Sensitive)

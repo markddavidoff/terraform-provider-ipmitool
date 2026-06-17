@@ -1,9 +1,11 @@
 package provider
 
 import (
+	"context"
+	"os"
+
 	"github.com/hashicorp/terraform-plugin-framework/diag"
-	"github.com/hashicorp/terraform-plugin-framework/path"
-	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 // lockoutCheck describes a single self-destructive condition.
@@ -18,29 +20,60 @@ type lockoutCheck struct {
 	Detail    string
 }
 
+// lockoutBypassEnv is the operational env var that lets a plan with a
+// triggered lockout guard proceed. Operationally scoped to one apply
+// — when the runner shell exits, the bypass is gone.
+const lockoutBypassEnv = "TF_IPMI_ALLOW_LOCKOUT"
+
+// allowLockoutBypassed reports whether the bypass env var is set to "1".
+func allowLockoutBypassed() bool {
+	return os.Getenv(lockoutBypassEnv) == "1"
+}
+
 // enforceLockoutGuards turns triggered checks into diagnostics:
 //
-//   - force_lockout_risk = true   → warning (the apply proceeds)
-//   - force_lockout_risk = false  → attribute error on force_lockout_risk
+//   - TF_IPMI_ALLOW_LOCKOUT=1 in the env → warning (the apply proceeds)
+//   - otherwise                         → error (the apply is blocked)
 //
-// The diagnostic always points at the force_lockout_risk attribute so the
-// user knows exactly how to opt in.
-func enforceLockoutGuards(force types.Bool, checks []lockoutCheck) diag.Diagnostics {
+// Every bypass emits BOTH a Diagnostics warning (visible in plan output)
+// AND a tflog.Warn structured event so the SIEM trail records who was
+// running, on what host, and why the guard was bypassed.
+//
+// resourceType / host are used for the structured event; pass the
+// resource's TypeName and the merged connection host.
+func enforceLockoutGuards(
+	ctx context.Context,
+	resourceType, host string,
+	checks []lockoutCheck,
+) diag.Diagnostics {
 	var diags diag.Diagnostics
-	forced := force.ValueBool()
+	bypassed := allowLockoutBypassed()
 	for _, c := range checks {
 		if !c.Triggered {
 			continue
 		}
-		if forced {
-			diags.AddWarning(c.Summary,
-				c.Detail+"\n\nProceeding because force_lockout_risk = true.")
+		if bypassed {
+			diags.AddWarning(
+				"Lockout guard bypassed (TF_IPMI_ALLOW_LOCKOUT=1): "+c.Summary,
+				c.Detail+"\n\nProceeding because TF_IPMI_ALLOW_LOCKOUT=1 is set "+
+					"in the runner environment. This is your only warning — "+
+					"the next apply may fail if you've actually locked yourself "+
+					"out of this BMC.",
+			)
+			tflog.Warn(ctx, "lockout guard bypassed", map[string]any{
+				"resource_type": resourceType,
+				"host":          host,
+				"reason":        c.Summary,
+				"bypass_via":    lockoutBypassEnv,
+			})
 			continue
 		}
-		diags.AddAttributeError(
-			path.Root("force_lockout_risk"),
+		diags.AddError(
 			c.Summary,
-			c.Detail+"\n\nTo proceed anyway, set force_lockout_risk = true.",
+			c.Detail+"\n\nTo proceed anyway, set "+lockoutBypassEnv+"=1 "+
+				"in the runner environment for this apply only. The env-var "+
+				"opt-in is operational (per-apply) rather than declarative "+
+				"(in .tf) so it can't be accidentally left set across runs.",
 		)
 	}
 	return diags

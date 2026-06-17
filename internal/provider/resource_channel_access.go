@@ -33,11 +33,10 @@ type channelAccessModel struct {
 	AccessMode       types.String `tfsdk:"access_mode"`
 	UserLevelAuth    types.Bool   `tfsdk:"user_level_auth"`
 	PerMessageAuth   types.Bool   `tfsdk:"per_message_auth"`
-	PEFAlerting      types.Bool   `tfsdk:"pef_alerting"`
-	PrivilegeLimit   types.String `tfsdk:"privilege_limit"`
-	Persistence      types.String `tfsdk:"persistence"`
-	ForceLockoutRisk types.Bool   `tfsdk:"force_lockout_risk"`
-	ID               types.String `tfsdk:"id"`
+	PEFAlerting    types.Bool   `tfsdk:"pef_alerting"`
+	PrivilegeLimit types.String `tfsdk:"privilege_limit"`
+	Persistence    types.String `tfsdk:"persistence"`
+	ID             types.String `tfsdk:"id"`
 }
 
 func (r *channelAccessResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -49,8 +48,8 @@ func (r *channelAccessResource) Schema(_ context.Context, _ resource.SchemaReque
 		Description: "Manage Set Channel Access for one channel — controls whether IPMI-over-LAN " +
 			"is enabled, what authentication is required, and the max privilege level.\n\n" +
 			"**Lockout warning:** setting `access_mode = \"disabled\"` on channel 1 (the standard " +
-			"LAN channel) will lock Terraform out of the BMC. This resource requires an explicit " +
-			"`force_lockout_risk = true` to allow it.",
+			"LAN channel) will lock Terraform out of the BMC. The plan is blocked unless " +
+			"`TF_IPMI_ALLOW_LOCKOUT=1` is set in the runner environment for the apply.",
 		Attributes: map[string]schema.Attribute{
 			"host":         schema.StringAttribute{Optional: true},
 			"username":     schema.StringAttribute{Optional: true},
@@ -98,12 +97,7 @@ func (r *channelAccessResource) Schema(_ context.Context, _ resource.SchemaReque
 					"or `both` (default). Reads always return the volatile/active settings.",
 				Validators: []validator.String{oneOf("volatile", "non_volatile", "both")},
 			},
-			"force_lockout_risk": schema.BoolAttribute{
-				Optional: true,
-				Description: "Set to true to override the channel-1 self-lockout guard. " +
-					"Without it, disabling LAN access on the channel Terraform uses is blocked.",
-			},
-			"id":           schema.StringAttribute{Computed: true},
+			"id": schema.StringAttribute{Computed: true},
 		},
 	}
 }
@@ -125,12 +119,12 @@ func (r *channelAccessResource) Configure(_ context.Context, req resource.Config
 //
 // The simple, defensible rule: if the plan would set `access_mode =
 // "disabled"` on **channel 1** (the standard LAN channel Terraform
-// authenticates over by default), require force_lockout_risk = true.
+// authenticates over by default), require TF_IPMI_ALLOW_LOCKOUT=1.
 // This is conservative — users on non-standard channels are responsible
 // for knowing if they're cutting their own connection.
 func (r *channelAccessResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
-	if req.Plan.Raw.IsNull() {
-		return // destroy
+	if r.factory == nil || req.Plan.Raw.IsNull() {
+		return // destroy or not configured yet
 	}
 	var plan channelAccessModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -146,7 +140,8 @@ func (r *channelAccessResource) ModifyPlan(ctx context.Context, req resource.Mod
 			"channel Terraform connects through. The BMC will reject all subsequent IPMI " +
 			"sessions until access is re-enabled via the host's serial console or BIOS.",
 	}
-	resp.Diagnostics.Append(enforceLockoutGuards(plan.ForceLockoutRisk, []lockoutCheck{check})...)
+	merged := r.factory.Defaults.Merge(r.overrideFromPlan(plan))
+	resp.Diagnostics.Append(enforceLockoutGuards(ctx, "ipmi_channel_access", merged.Host, []lockoutCheck{check})...)
 }
 
 func (r *channelAccessResource) overrideFromPlan(p channelAccessModel) ipmi.ConnectionParams {

@@ -61,7 +61,8 @@ resource "ipmi_user" "tf_test" {
 }
 
 // TestAccUserResource_selfDisableBlocked verifies the lockout guard:
-// disabling the connection user without force_lockout_risk should error.
+// disabling the connection user without TF_IPMI_ALLOW_LOCKOUT=1 in the
+// runner env should error at plan time.
 //
 // Uses ExpectError to assert the diagnostic fires; nothing is actually
 // applied so the BMC's connection user stays untouched.

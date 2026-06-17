@@ -4,14 +4,14 @@ page_title: "ipmi_lan Resource - ipmi"
 subcategory: ""
 description: |-
   Manage BMC LAN configuration on one channel. Each set field is written; omitted fields are left alone on the BMC. Reads are per-selector and tolerate BMCs that don't implement every parameter (POC 3 found R210 II supports 20 of 24).
-  Lockout warning: changing ip_address, ip_source, or vlan_id on channel 1 can break the provider's BMC connection. This resource requires explicit force_lockout_risk = true for those changes on channel 1.
+  Lockout warning: changing ip_address, ip_source, or vlan_id on channel 1 can break the provider's BMC connection. The plan is blocked unless TF_IPMI_ALLOW_LOCKOUT=1 is set in the runner environment for the apply.
 ---
 
 # ipmi_lan (Resource)
 
 Manage BMC LAN configuration on one channel. Each set field is written; omitted fields are left alone on the BMC. Reads are per-selector and tolerate BMCs that don't implement every parameter (POC 3 found R210 II supports 20 of 24).
 
-**Lockout warning:** changing `ip_address`, `ip_source`, or `vlan_id` on channel 1 can break the provider's BMC connection. This resource requires explicit `force_lockout_risk = true` for those changes on channel 1.
+**Lockout warning:** changing `ip_address`, `ip_source`, or `vlan_id` on channel 1 can break the provider's BMC connection. The plan is blocked unless `TF_IPMI_ALLOW_LOCKOUT=1` is set in the runner environment for the apply.
 
 
 
@@ -27,7 +27,6 @@ Manage BMC LAN configuration on one channel. Each set field is written; omitted 
 - `backup_gateway` (String)
 - `cipher_suite` (Number)
 - `default_gateway` (String)
-- `force_lockout_risk` (Boolean) Set true to override the channel-1 IP/VLAN lockout guard.
 - `host` (String)
 - `interface` (String)
 - `ip_address` (String) BMC IPv4 address as `a.b.c.d`.
