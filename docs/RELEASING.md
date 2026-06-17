@@ -131,8 +131,16 @@ To re-export the public key later (e.g., for a different repo):
 ### Option A — release via GitHub Actions (recommended)
 
 ```bash
-git tag -a v0.1.0 -m "v0.1.0 — initial release"
-git push origin v0.1.0
+# Convenience wrapper: validates we're on main / in sync / no tag
+# collision, prompts for the GPG passphrase silently (no pinentry —
+# avoids the "Inappropriate ioctl for device" failure mode), signs +
+# pushes, and offers to start `gh run watch`. The release-key
+# fingerprint is hard-coded in the script.
+make release-tag VERSION=v0.3.0
+
+# Or, the manual equivalent:
+git tag -s -u <fingerprint> v0.3.0 -m "v0.3.0"
+git push origin v0.3.0
 ```
 
 The `.github/workflows/release.yml` workflow takes it from there
