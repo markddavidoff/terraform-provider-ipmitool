@@ -348,6 +348,7 @@ type ClientFactory struct {
 	IpmitoolPath         string
 	Defaults             ConnectionParams
 	MaxConcurrentPerHost int
+	RunID                string // attached to tflog events when non-empty
 	MockFn               func(ConnectionParams) BMCClient
 
 	semaphores sync.Map // host string -> chan struct{} (capacity = MaxConcurrentPerHost)

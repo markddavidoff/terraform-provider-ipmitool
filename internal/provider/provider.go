@@ -6,6 +6,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -14,6 +15,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 
 	"github.com/markddavidoff/terraform-provider-ipmitool/internal/ipmi"
 )
@@ -41,6 +43,7 @@ type providerConfigModel struct {
 	AllowUnauthenticated      types.Bool   `tfsdk:"allow_unauthenticated"`
 	MaxConcurrentCallsPerHost types.Int64  `tfsdk:"max_concurrent_calls_per_host"`
 	HealthCheck               types.Bool   `tfsdk:"health_check"`
+	RunID                     types.String `tfsdk:"run_id"`
 }
 
 func (p *ipmiProvider) Metadata(_ context.Context, _ provider.MetadataRequest, resp *provider.MetadataResponse) {
@@ -116,6 +119,16 @@ func (p *ipmiProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp 
 					"those still fail at apply time. Defaults to false " +
 					"(zero network calls at Configure).",
 			},
+			"run_id": schema.StringAttribute{
+				Optional: true,
+				Description: "Correlation ID included in every structured " +
+					"tflog event so SIEMs can join provider operations " +
+					"against CI runner logs. Primary source: the " +
+					"`TF_IPMI_RUN_ID` env var. This attribute wins if both " +
+					"are set. Common sources: GitHub Actions `${{ github.run_id }}`, " +
+					"Terraform Cloud `TFC_RUN_ID`, Atlantis `ATLANTIS_RUN_ID`. " +
+					"Omitted from log fields if neither is set.",
+			},
 		},
 	}
 }
@@ -172,9 +185,21 @@ func (p *ipmiProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 		return
 	}
 
+	// Correlation ID for tflog events: provider-block attribute wins; env
+	// var TF_IPMI_RUN_ID is the fallback; empty means "don't attach the
+	// field to any log event".
+	runID := data.RunID.ValueString()
+	if runID == "" {
+		runID = os.Getenv("TF_IPMI_RUN_ID")
+	}
+	if runID != "" {
+		ctx = tflog.SetField(ctx, "run_id", runID)
+	}
+
 	factory := &ipmi.ClientFactory{
 		IpmitoolPath:         binaryPath,
 		MaxConcurrentPerHost: intOr(data.MaxConcurrentCallsPerHost, 3),
+		RunID:                runID,
 		Defaults: ipmi.ConnectionParams{
 			Host:        data.Host.ValueString(),
 			Username:    data.Username.ValueString(),
