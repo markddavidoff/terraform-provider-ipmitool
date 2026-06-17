@@ -92,9 +92,9 @@ func (d *chassisStatusDataSource) Read(ctx context.Context, req datasource.ReadR
 		Host:        data.Host.ValueString(),
 		Username:    data.Username.ValueString(),
 		Password:    data.Password.ValueString(),
-		Port:        int(data.Port.ValueInt64()),
+		Port: optionalIntPtr(data.Port),
 		Interface:   data.Interface.ValueString(),
-		CipherSuite: int(data.CipherSuite.ValueInt64()),
+		CipherSuite: optionalIntPtr(data.CipherSuite),
 	}
 	client := d.factory.New(override)
 

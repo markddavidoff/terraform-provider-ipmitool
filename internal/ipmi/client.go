@@ -8,23 +8,34 @@
 // bmc-toolbox/bmclib for the same use case.
 package ipmi
 
-import "context"
+import (
+	"context"
+	"sync"
+)
 
 // ConnectionParams are the per-resource (or provider-default) settings
 // needed to talk to a single BMC. Resources merge their per-resource
 // overrides onto the provider defaults via Merge.
+//
+// Port and CipherSuite are pointers so a per-resource override of zero
+// is distinguishable from "not set" — required for cipher_suite = 0
+// (RMCP+ no-auth) to actually override a non-zero provider default.
 type ConnectionParams struct {
 	Host        string
 	Username    string
 	Password    string
-	Port        int
+	Port        *int
 	Interface   string // "lanplus" / "lan" / "open"
-	CipherSuite int
+	CipherSuite *int
 	TimeoutSecs int
 }
 
-// Merge applies override on top of base. Zero values in override are
-// treated as "not set" — base wins for them.
+// IntPtr returns a pointer to v. Helper for constructing ConnectionParams
+// with literal int values (mostly used by tests and by provider Configure).
+func IntPtr(v int) *int { return &v }
+
+// Merge applies override on top of base. Empty-string and nil-pointer
+// values in override are treated as "not set" — base wins for them.
 func (base ConnectionParams) Merge(override ConnectionParams) ConnectionParams {
 	out := base
 	if override.Host != "" {
@@ -36,13 +47,13 @@ func (base ConnectionParams) Merge(override ConnectionParams) ConnectionParams {
 	if override.Password != "" {
 		out.Password = override.Password
 	}
-	if override.Port != 0 {
+	if override.Port != nil {
 		out.Port = override.Port
 	}
 	if override.Interface != "" {
 		out.Interface = override.Interface
 	}
-	if override.CipherSuite != 0 {
+	if override.CipherSuite != nil {
 		out.CipherSuite = override.CipherSuite
 	}
 	if override.TimeoutSecs != 0 {
@@ -327,10 +338,40 @@ type BMCClient interface {
 // The MockFn field is the unit-test injection point: tests construct a
 // ClientFactory{MockFn: func(p) BMCClient { return &MockBMCClient{...} }}
 // and pass it to the resource directly.
+//
+// MaxConcurrentPerHost caps how many ipmitool subprocesses can be in
+// flight against a single BMC at once. Defaults to 3 — sized for the
+// iDRAC6 session table (the empirical small-fleet failure mode Devon
+// flagged). Raise to 8 for iDRAC7+, 16+ for SuperMicro X10+ /
+// AsRock Rack. Zero or negative falls back to 3.
 type ClientFactory struct {
-	IpmitoolPath string
-	Defaults     ConnectionParams
-	MockFn       func(ConnectionParams) BMCClient
+	IpmitoolPath         string
+	Defaults             ConnectionParams
+	MaxConcurrentPerHost int
+	RunID                string // attached to tflog events when non-empty
+	MockFn               func(ConnectionParams) BMCClient
+
+	semaphores sync.Map // host string -> chan struct{} (capacity = MaxConcurrentPerHost)
+}
+
+// acquire blocks until a slot is available for the given host, then
+// returns the semaphore channel. Callers must call release(sem).
+// The semaphore is keyed by the merged host string, so per-resource
+// connection-override hosts share a slot pool with the provider-block
+// host if (and only if) they are byte-identical strings.
+func (f *ClientFactory) acquire(host string) chan struct{} {
+	cap := f.MaxConcurrentPerHost
+	if cap <= 0 {
+		cap = 3
+	}
+	sem, _ := f.semaphores.LoadOrStore(host, make(chan struct{}, cap))
+	c := sem.(chan struct{})
+	c <- struct{}{}
+	return c
+}
+
+func (f *ClientFactory) release(sem chan struct{}) {
+	<-sem
 }
 
 func (f *ClientFactory) New(override ConnectionParams) BMCClient {
@@ -338,5 +379,5 @@ func (f *ClientFactory) New(override ConnectionParams) BMCClient {
 	if f.MockFn != nil {
 		return f.MockFn(params)
 	}
-	return newIpmitoolClient(f.IpmitoolPath, params)
+	return newIpmitoolClient(f.IpmitoolPath, params, f)
 }

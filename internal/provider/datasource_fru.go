@@ -99,8 +99,8 @@ func (d *fruDataSource) Read(ctx context.Context, req datasource.ReadRequest, re
 	}
 	client := d.factory.New(ipmi.ConnectionParams{
 		Host: data.Host.ValueString(), Username: data.Username.ValueString(),
-		Password: data.Password.ValueString(), Port: int(data.Port.ValueInt64()),
-		Interface: data.Interface.ValueString(), CipherSuite: int(data.CipherSuite.ValueInt64()),
+		Password: data.Password.ValueString(), Port: optionalIntPtr(data.Port),
+		Interface: data.Interface.ValueString(), CipherSuite: optionalIntPtr(data.CipherSuite),
 	})
 	f, err := client.GetFRU(ctx, deviceID)
 	if err != nil {

@@ -3,8 +3,8 @@ package provider
 import (
 	"context"
 	"fmt"
-	"time"
 
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -31,7 +31,6 @@ type solModel struct {
 	PrivilegeLimit      types.String `tfsdk:"privilege_limit"`
 	ForceAuthentication types.Bool   `tfsdk:"force_authentication"`
 	ForceEncryption     types.Bool   `tfsdk:"force_encryption"`
-	LastUpdated         types.String `tfsdk:"last_updated"`
 	ID                  types.String `tfsdk:"id"`
 }
 
@@ -84,7 +83,6 @@ func (r *solResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 				Description: "Require encrypted SOL payloads. Default true.",
 			},
 
-			"last_updated": schema.StringAttribute{Computed: true},
 			"id":           schema.StringAttribute{Computed: true},
 		},
 	}
@@ -106,16 +104,16 @@ func (r *solResource) Configure(_ context.Context, req resource.ConfigureRequest
 func (r *solResource) overrideFromPlan(p solModel) ipmi.ConnectionParams {
 	return ipmi.ConnectionParams{
 		Host: p.Host.ValueString(), Username: p.Username.ValueString(),
-		Password: p.Password.ValueString(), Port: int(p.Port.ValueInt64()),
-		Interface: p.Interface.ValueString(), CipherSuite: int(p.CipherSuite.ValueInt64()),
+		Password: p.Password.ValueString(), Port: optionalIntPtr(p.Port),
+		Interface: p.Interface.ValueString(), CipherSuite: optionalIntPtr(p.CipherSuite),
 	}
 }
 
 func (r *solResource) idFor(override ipmi.ConnectionParams, channel int64) string {
 	merged := r.factory.Defaults.Merge(override)
-	port := merged.Port
-	if port == 0 {
-		port = 623
+	port := 623
+	if merged.Port != nil {
+		port = *merged.Port
 	}
 	return fmt.Sprintf("%s:%d/ch%d/sol", merged.Host, port, channel)
 }
@@ -195,7 +193,6 @@ func (r *solResource) Create(ctx context.Context, req resource.CreateRequest, re
 		return
 	}
 	r.applyConfigToState(&plan, cfg)
-	plan.LastUpdated = types.StringValue(time.Now().UTC().Format(time.RFC3339))
 	plan.ID = types.StringValue(r.idFor(override, int64(ch)))
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -235,11 +232,21 @@ func (r *solResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		return
 	}
 	r.applyConfigToState(&plan, cfg)
-	plan.LastUpdated = types.StringValue(time.Now().UTC().Format(time.RFC3339))
 	plan.ID = types.StringValue(r.idFor(override, int64(ch)))
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
 // Delete is a no-op — reverting SOL settings is itself disruptive.
 func (r *solResource) Delete(_ context.Context, _ resource.DeleteRequest, _ *resource.DeleteResponse) {
+}
+
+func (r *solResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	host, port, err := parseHostPortID(req.ID)
+	if err != nil {
+		resp.Diagnostics.AddError("invalid import ID", err.Error())
+		return
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("host"), host)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("port"), int64(port))...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
 }

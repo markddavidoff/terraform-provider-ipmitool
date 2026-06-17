@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestConnectionParams_Merge(t *testing.T) {
@@ -13,9 +14,9 @@ func TestConnectionParams_Merge(t *testing.T) {
 		Host:        "192.0.2.10",
 		Username:    "root",
 		Password:    "oldpass",
-		Port:        623,
+		Port:        IntPtr(623),
 		Interface:   "lanplus",
-		CipherSuite: 3,
+		CipherSuite: IntPtr(3),
 		TimeoutSecs: 15,
 	}
 
@@ -30,15 +31,25 @@ func TestConnectionParams_Merge(t *testing.T) {
 		if got.Username != "root" {
 			t.Errorf("Username should be preserved from base, got %q", got.Username)
 		}
-		if got.Port != 623 || got.CipherSuite != 3 {
-			t.Errorf("numeric fields should be preserved: port=%d cipher=%d", got.Port, got.CipherSuite)
+		if got.Port == nil || *got.Port != 623 || got.CipherSuite == nil || *got.CipherSuite != 3 {
+			t.Errorf("numeric fields should be preserved: port=%v cipher=%v", got.Port, got.CipherSuite)
 		}
 	})
 
-	t.Run("zero override returns base", func(t *testing.T) {
+	t.Run("nil-pointer override returns base", func(t *testing.T) {
 		got := base.Merge(ConnectionParams{})
-		if got != base {
-			t.Errorf("zero override should not change base, got %+v", got)
+		if got.Host != base.Host || got.Username != base.Username ||
+			got.Password != base.Password || got.Interface != base.Interface ||
+			got.TimeoutSecs != base.TimeoutSecs ||
+			got.Port != base.Port || got.CipherSuite != base.CipherSuite {
+			t.Errorf("nil override should not change base, got %+v", got)
+		}
+	})
+
+	t.Run("explicit zero cipher overrides non-zero base", func(t *testing.T) {
+		got := base.Merge(ConnectionParams{CipherSuite: IntPtr(0)})
+		if got.CipherSuite == nil || *got.CipherSuite != 0 {
+			t.Errorf("explicit CipherSuite=0 should override base, got %v", got.CipherSuite)
 		}
 	})
 }
@@ -156,4 +167,72 @@ func TestSplitKV(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestClientFactory_PerHostConcurrencyCap(t *testing.T) {
+	t.Parallel()
+
+	f := &ClientFactory{MaxConcurrentPerHost: 2}
+
+	// Saturate the host.
+	a := f.acquire("h1")
+	b := f.acquire("h1")
+
+	// Third acquire on the same host must block; verify via timeout.
+	blocked := make(chan struct{})
+	go func() {
+		c := f.acquire("h1")
+		defer f.release(c)
+		close(blocked)
+	}()
+	select {
+	case <-blocked:
+		t.Fatal("3rd acquire on h1 should block when cap=2")
+	case <-time.After(50 * time.Millisecond):
+		// expected — slot is full
+	}
+
+	// A different host has its own pool — acquire should not block.
+	d := f.acquire("h2")
+	f.release(d)
+
+	// Release one h1 slot; the blocked goroutine should now proceed.
+	f.release(a)
+	select {
+	case <-blocked:
+		// expected — slot opened up
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("3rd acquire on h1 should unblock after release")
+	}
+
+	f.release(b)
+}
+
+func TestClientFactory_PerHostConcurrencyCap_ZeroDefaultsToThree(t *testing.T) {
+	t.Parallel()
+
+	f := &ClientFactory{} // MaxConcurrentPerHost = 0 → expect 3
+
+	// Three concurrent acquires should succeed.
+	sems := []chan struct{}{
+		f.acquire("h"),
+		f.acquire("h"),
+		f.acquire("h"),
+	}
+	// Fourth must block.
+	blocked := make(chan struct{})
+	go func() {
+		c := f.acquire("h")
+		defer f.release(c)
+		close(blocked)
+	}()
+	select {
+	case <-blocked:
+		t.Fatal("4th acquire should block when default cap is 3")
+	case <-time.After(50 * time.Millisecond):
+	}
+	for _, s := range sems {
+		f.release(s)
+	}
+	<-blocked
 }

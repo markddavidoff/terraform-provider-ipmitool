@@ -6,6 +6,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -14,6 +15,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 
 	"github.com/markddavidoff/terraform-provider-ipmitool/internal/ipmi"
 )
@@ -31,13 +33,17 @@ type ipmiProvider struct {
 
 // providerConfigModel mirrors the provider block schema for tfsdk decode.
 type providerConfigModel struct {
-	Host           types.String `tfsdk:"host"`
-	Username       types.String `tfsdk:"username"`
-	Password       types.String `tfsdk:"password"`
-	Port           types.Int64  `tfsdk:"port"`
-	Interface      types.String `tfsdk:"interface"`
-	CipherSuite    types.Int64  `tfsdk:"cipher_suite"`
-	TimeoutSeconds types.Int64  `tfsdk:"timeout_seconds"`
+	Host                      types.String `tfsdk:"host"`
+	Username                  types.String `tfsdk:"username"`
+	Password                  types.String `tfsdk:"password"`
+	Port                      types.Int64  `tfsdk:"port"`
+	Interface                 types.String `tfsdk:"interface"`
+	CipherSuite               types.Int64  `tfsdk:"cipher_suite"`
+	TimeoutSeconds            types.Int64  `tfsdk:"timeout_seconds"`
+	AllowUnauthenticated      types.Bool   `tfsdk:"allow_unauthenticated"`
+	MaxConcurrentCallsPerHost types.Int64  `tfsdk:"max_concurrent_calls_per_host"`
+	HealthCheck               types.Bool   `tfsdk:"health_check"`
+	RunID                     types.String `tfsdk:"run_id"`
 }
 
 func (p *ipmiProvider) Metadata(_ context.Context, _ provider.MetadataRequest, resp *provider.MetadataResponse) {
@@ -72,14 +78,56 @@ func (p *ipmiProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp 
 				Description: "ipmitool interface: lanplus (default), lan, or open.",
 			},
 			"cipher_suite": schema.Int64Attribute{
-				Optional: true,
-				Description: "RMCP+ cipher suite ID. Defaults to 3 (RAKP-HMAC-SHA1) for " +
-					"compatibility with older Dell 11G BMCs. Set to 17 on modern hardware.",
+				Required: true,
+				Description: "RMCP+ cipher suite ID. **Required** — no safe " +
+					"default. Common values:\n" +
+					"  - `3`: RAKP-HMAC-SHA1 + AES-CBC-128. Legacy Dell 11G, " +
+					"iDRAC6.\n" +
+					"  - `17`: RAKP-HMAC-SHA256 + AES-CBC-128. iDRAC7+, " +
+					"SuperMicro X10+, AsRock Rack, modern hardware.\n" +
+					"  - `0`: no auth, no integrity. Requires " +
+					"`allow_unauthenticated = true`.\n\n" +
+					"Run `make detect-cipher HOST=... USER=...` against a BMC " +
+					"to probe (warning: each failed probe is one failed auth " +
+					"attempt; iDRAC default lockout = 3 strikes).",
 			},
 			"timeout_seconds": schema.Int64Attribute{
 				Optional: true,
 				Description: "Per-call timeout for ipmitool subprocess. Defaults to 60s — " +
 					"older BMCs are slow on `sdr list` (full SDR iteration).",
+			},
+			"allow_unauthenticated": schema.BoolAttribute{
+				Optional: true,
+				Description: "Opt-in confirmation that cipher_suite = 0 " +
+					"(no RMCP+ authentication or integrity) is intentional. " +
+					"Setting cipher_suite = 0 without this flag is a Configure-" +
+					"time error. Never set this for production.",
+			},
+			"max_concurrent_calls_per_host": schema.Int64Attribute{
+				Optional: true,
+				Description: "Maximum concurrent ipmitool subprocesses per " +
+					"host. Defaults to 3 (safe for iDRAC6 session table). " +
+					"Raise for modern BMCs: 8 for iDRAC7+, 16+ for " +
+					"SuperMicro X10+ / AsRock Rack.",
+			},
+			"health_check": schema.BoolAttribute{
+				Optional: true,
+				Description: "When true, run `mc info` at Configure time " +
+					"using the provider-block defaults to fail fast on " +
+					"unreachable hosts or bad credentials. " +
+					"**Per-resource connection overrides are NOT probed** — " +
+					"those still fail at apply time. Defaults to false " +
+					"(zero network calls at Configure).",
+			},
+			"run_id": schema.StringAttribute{
+				Optional: true,
+				Description: "Correlation ID included in every structured " +
+					"tflog event so SIEMs can join provider operations " +
+					"against CI runner logs. Primary source: the " +
+					"`TF_IPMI_RUN_ID` env var. This attribute wins if both " +
+					"are set. Common sources: GitHub Actions `${{ github.run_id }}`, " +
+					"Terraform Cloud `TFC_RUN_ID`, Atlantis `ATLANTIS_RUN_ID`. " +
+					"Omitted from log fields if neither is set.",
 			},
 		},
 	}
@@ -123,17 +171,61 @@ func (p *ipmiProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 		}
 	}
 
+	// cipher_suite is Required (schema-enforced) but verify the value
+	// satisfies the cipher=0 opt-in invariant.
+	cipher := int(data.CipherSuite.ValueInt64())
+	if cipher == 0 && !data.AllowUnauthenticated.ValueBool() {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("cipher_suite"),
+			"cipher_suite = 0 requires explicit opt-in",
+			"Cipher suite 0 disables RMCP+ authentication and integrity. "+
+				"Set allow_unauthenticated = true on the provider block to "+
+				"confirm this is intentional. Never do this in production.",
+		)
+		return
+	}
+
+	// Correlation ID for tflog events: provider-block attribute wins; env
+	// var TF_IPMI_RUN_ID is the fallback; empty means "don't attach the
+	// field to any log event".
+	runID := data.RunID.ValueString()
+	if runID == "" {
+		runID = os.Getenv("TF_IPMI_RUN_ID")
+	}
+	if runID != "" {
+		ctx = tflog.SetField(ctx, "run_id", runID)
+	}
+
 	factory := &ipmi.ClientFactory{
-		IpmitoolPath: binaryPath,
+		IpmitoolPath:         binaryPath,
+		MaxConcurrentPerHost: intOr(data.MaxConcurrentCallsPerHost, 3),
+		RunID:                runID,
 		Defaults: ipmi.ConnectionParams{
 			Host:        data.Host.ValueString(),
 			Username:    data.Username.ValueString(),
 			Password:    data.Password.ValueString(),
-			Port:        intOr(data.Port, 623),
+			Port:        ipmi.IntPtr(intOr(data.Port, 623)),
 			Interface:   iface,
-			CipherSuite: intOr(data.CipherSuite, 3),
+			CipherSuite: ipmi.IntPtr(cipher),
 			TimeoutSecs: intOr(data.TimeoutSeconds, 60),
 		},
+	}
+
+	// Optional health probe against the provider-block defaults. Skipped
+	// silently if host is empty (caller intends per-resource overrides for
+	// everything) or if health_check is unset.
+	if data.HealthCheck.ValueBool() && factory.Defaults.Host != "" {
+		probe := factory.New(ipmi.ConnectionParams{})
+		if _, err := probe.GetBMCInfo(ctx); err != nil {
+			resp.Diagnostics.AddError(
+				"ipmi: health check failed",
+				"Configure-time `mc info` probe failed against "+
+					factory.Defaults.Host+": "+err.Error()+". Verify host, "+
+					"port, username, password, cipher_suite, and network "+
+					"reachability. Set health_check = false to skip this probe.",
+			)
+			return
+		}
 	}
 
 	resp.DataSourceData = factory
@@ -169,4 +261,15 @@ func intOr(v types.Int64, def int) int {
 		return def
 	}
 	return int(v.ValueInt64())
+}
+
+// optionalIntPtr converts a framework Int64 attribute into *int.
+// Returns nil when the attribute is Null or Unknown — distinguishes
+// "user didn't set this" from "user explicitly set to zero".
+func optionalIntPtr(v types.Int64) *int {
+	if v.IsNull() || v.IsUnknown() {
+		return nil
+	}
+	out := int(v.ValueInt64())
+	return &out
 }

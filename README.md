@@ -11,7 +11,7 @@ to fill the gap where Dell's own
 doesn't reach — older Dell 11G hardware (R210 II, R610, R710) that
 predates Redfish.
 
-> **Status:** v0.1.0. Verified end-to-end against a Dell R210 II bare
+> **Status:** v0.2.0. Verified end-to-end against a Dell R210 II bare
 > BMC and a Dell iDRAC 7 Enterprise.
 
 ## Why a new provider
@@ -32,7 +32,8 @@ connection overrides for multi-host fleets.
 
 ## Requirements
 
-- Terraform ≥ 1.5 (or OpenTofu)
+- Terraform ≥ 1.5 (or OpenTofu). The `ipmi_user` resource specifically
+  requires Terraform ≥ 1.11 for its WriteOnly password attribute.
 - `ipmitool` ≥ 1.8.18 installed on the host that runs `terraform apply`
   - macOS: `brew install ipmitool`
   - Debian / Ubuntu: `apt install ipmitool`
@@ -42,6 +43,32 @@ connection overrides for multi-host fleets.
 The provider detects `ipmitool` at `Configure` time and emits a clear
 install hint if it isn't on `PATH`.
 
+> Canonical Registry source: **`markddavidoff/ipmitool`**. Beware
+> typo-squat namespaces — if your `source =` line is anything else,
+> it's not this provider.
+
+## Cipher suite selection
+
+`cipher_suite` is **required** on the provider block — no safe default.
+The right value depends on your BMC hardware:
+
+| Hardware                  | cipher_suite |
+|---------------------------|--------------|
+| Dell PowerEdge 11G (bare) | `3`          |
+| Dell iDRAC 6              | `3`          |
+| Dell iDRAC 7+             | `17`         |
+| SuperMicro X10/X11/X12    | `17`         |
+| AsRock Rack               | `17`         |
+| Unknown                   | run `make detect-cipher` |
+
+Cipher `3` is RAKP-HMAC-SHA1 + AES-CBC-128. Cipher `17` is
+RAKP-HMAC-SHA256 + AES-CBC-128. Use `17` wherever supported.
+
+⚠️ **Lockout warning when probing:** the `detect-cipher` script makes
+one auth attempt per cipher suite tried. Most BMCs lock the account
+after 3–5 failed attempts (iDRAC default: 3 → 10-min lockout). Run
+against ONE host at a time, with a known-good username/password.
+
 ## Quick start
 
 ```hcl
@@ -49,7 +76,7 @@ terraform {
   required_providers {
     ipmi = {
       source  = "markddavidoff/ipmitool"
-      version = "~> 0.1"
+      version = "~> 0.2"
     }
   }
 }
@@ -58,7 +85,7 @@ provider "ipmi" {
   host         = "192.0.2.10"
   username     = "root"
   password     = var.bmc_password
-  cipher_suite = 3                 # default — works with older Dell BMCs
+  cipher_suite = 17                # see "Cipher suite selection" above
 }
 
 # Read current chassis state.
@@ -74,6 +101,24 @@ output "power_state" {
   value = data.ipmi_chassis_status.host.power_on
 }
 ```
+
+## Managing BMC credentials
+
+`password = var.bmc_password` in a `.tfvars` is the obvious
+starting point and the wrong long-term default — BMC creds end up in
+state. Source them through SOPS, Vault, or env vars instead. See
+[Managing BMC credentials in the provider docs](docs/index.md#managing-bmc-credentials)
+for working examples.
+
+## Security & network requirements
+
+IPMI must live on an isolated management VLAN. The Terraform runner
+needs UDP/623 to each BMC; nothing else should. Use cipher 17 wherever
+supported, keep BMC passwords ≥ 20 chars, and treat state-file access
+as equivalent to BMC root. See
+[Security & network requirements in the provider docs](docs/index.md#security--network-requirements)
+for the full threat model including CVE-2013-4786 (RAKP hash
+disclosure).
 
 ## Resources
 
@@ -107,9 +152,11 @@ plan-time lockout guards that block self-destructive applies:
 - Disabling LAN access on channel 1
 - Changing the BMC's IP, switching to DHCP, or changing VLAN on channel 1
 
-Each blocked plan errors with a clear message and the remedy:
-`force_lockout_risk = true`. Setting that attribute downgrades the
-error to a warning so you can opt in explicitly.
+Each blocked plan errors with a clear message and the remedy: set
+`TF_IPMI_ALLOW_LOCKOUT=1` in the runner environment to bypass the
+guard for that apply. The bypass is operational (per-apply) rather
+than declarative (in `.tf`), so it can't be accidentally left set
+across runs. Every bypass emits a `tflog.Warn` for the SIEM trail.
 
 ## Multi-host fleets
 
@@ -147,6 +194,14 @@ Tested end-to-end against:
 
 Known limitations:
 
+- **Non-Dell hardware is best-effort.** The `splitColumns` parser in
+  `client_ipmitool.go` was verified against Dell R210 II and iDRAC 7
+  output formats only. SuperMicro X9/X10/X11 and AsRock Rack BMCs ship
+  the same upstream `ipmitool` but vendor BMC firmware varies in
+  column layout for `user list` and similar. If you hit parse failures
+  on non-Dell hardware, open an issue with the raw output of
+  `ipmitool user list 1` / `ipmitool lan print 1` and we'll add a
+  fixture.
 - **Dell 11G bare BMC rejects remote `Set User Name`** — the
   `ipmi_user` resource works correctly on conforming BMCs (SuperMicro,
   AsRock Rack, etc.) but Dell 11G requires RACADM for user CRUD.

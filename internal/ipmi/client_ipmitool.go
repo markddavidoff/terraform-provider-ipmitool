@@ -4,10 +4,13 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 // ipmitoolClient implements BMCClient by subprocess-spawning ipmitool
@@ -15,12 +18,28 @@ import (
 // exit. No long-lived sessions, no keepalives — sidesteps the POC 1
 // session-lifecycle problem.
 type ipmitoolClient struct {
-	binary string
-	params ConnectionParams
+	binary  string
+	params  ConnectionParams
+	factory *ClientFactory // nil in tests; non-nil in production (carries per-host semaphores)
 }
 
-func newIpmitoolClient(binary string, params ConnectionParams) *ipmitoolClient {
-	return &ipmitoolClient{binary: binary, params: params}
+func newIpmitoolClient(binary string, params ConnectionParams, factory *ClientFactory) *ipmitoolClient {
+	return &ipmitoolClient{binary: binary, params: params, factory: factory}
+}
+
+// logStateChange emits a tflog.Info event for an operation that mutates
+// BMC state — power transitions, user CRUD, LAN config writes, etc.
+// Inputs that may contain secrets (passwords) are scrubbed; the operator
+// is responsible for passing already-scrubbed values.
+func (c *ipmitoolClient) logStateChange(ctx context.Context, op string, fields map[string]any) {
+	merged := map[string]any{
+		"host":      c.params.Host,
+		"operation": op,
+	}
+	for k, v := range fields {
+		merged[k] = v
+	}
+	tflog.Info(ctx, "ipmi: state-changing operation", merged)
 }
 
 // run executes ipmitool with the configured connection args and the
@@ -38,15 +57,43 @@ func (c *ipmitoolClient) run(ctx context.Context, args ...string) (string, error
 		timeout = 60 * time.Second
 	}
 
+	port := 623
+	if c.params.Port != nil {
+		port = *c.params.Port
+	}
+	cipher := 3
+	if c.params.CipherSuite != nil {
+		cipher = *c.params.CipherSuite
+	}
+	// Per-host concurrency cap (M-7). Acquire a slot before spawning the
+	// subprocess and hold it across all retry attempts — better than
+	// releasing-and-reacquiring on each retry, which would let other
+	// goroutines pile on while we're already in a retry backoff.
+	if c.factory != nil {
+		sem := c.factory.acquire(c.params.Host)
+		defer c.factory.release(sem)
+	}
+
+	// Password is handed off via the IPMI_PASSWORD env var (-E flag)
+	// instead of -P on argv. -P leaks the password into `ps`, /proc, and
+	// process accounting. Closes C-1 from the v0.2 security review.
 	common := []string{
 		"-I", c.params.Interface,
-		"-C", strconv.Itoa(c.params.CipherSuite),
+		"-C", strconv.Itoa(cipher),
 		"-H", c.params.Host,
-		"-p", strconv.Itoa(c.params.Port),
+		"-p", strconv.Itoa(port),
 		"-U", c.params.Username,
-		"-P", c.params.Password,
+		"-E",
 	}
 	full := append(common, args...)
+
+	// Trace every BMC call at Debug. Useful for diagnosing parser issues
+	// on unfamiliar BMC hardware (SuperMicro, AsRock Rack) — enable with
+	// TF_LOG=DEBUG. Stays out of normal Info/Warn output.
+	tflog.Debug(ctx, "ipmi: invoking ipmitool", map[string]any{
+		"host": c.params.Host,
+		"args": strings.Join(args, " "),
+	})
 
 	const maxAttempts = 3
 	backoff := 500 * time.Millisecond
@@ -54,6 +101,7 @@ func (c *ipmitoolClient) run(ctx context.Context, args ...string) (string, error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		ctx2, cancel := context.WithTimeout(ctx, timeout)
 		cmd := exec.CommandContext(ctx2, c.binary, full...)
+		cmd.Env = append(os.Environ(), "IPMI_PASSWORD="+c.params.Password)
 		out, err := cmd.Output()
 		cancel()
 		if err == nil {
@@ -70,6 +118,17 @@ func (c *ipmitoolClient) run(ctx context.Context, args ...string) (string, error
 		if !isTransientBMCError(stderr) || attempt == maxAttempts {
 			return string(out), lastErr
 		}
+
+		// Q3: surface retries so a 90s silent hang during contention is
+		// visible in TF_LOG=WARN and forwardable to SIEM.
+		tflog.Warn(ctx, "ipmitool: transient BMC error, retrying", map[string]any{
+			"host":       c.params.Host,
+			"attempt":    attempt,
+			"max":        maxAttempts,
+			"backoff_ms": backoff.Milliseconds(),
+			"stderr":     stderr,
+			"args":       strings.Join(args, " "),
+		})
 
 		select {
 		case <-ctx.Done():
@@ -250,6 +309,9 @@ func (c *ipmitoolClient) SetBootDevice(ctx context.Context, device BootDevice, p
 	default:
 		return fmt.Errorf("unsupported boot device %q", device)
 	}
+	c.logStateChange(ctx, "SetBootDevice", map[string]any{
+		"device": string(device), "persistent": persistent, "efi": efi,
+	})
 	args := []string{"chassis", "bootdev", string(device)}
 	var opts []string
 	if persistent {
@@ -335,6 +397,7 @@ func (c *ipmitoolClient) SetPowerState(ctx context.Context, state PowerState) er
 	default:
 		return fmt.Errorf("unsupported power state %q", state)
 	}
+	c.logStateChange(ctx, "SetPowerState", map[string]any{"state": verb})
 	_, err := c.run(ctx, "chassis", "power", verb)
 	return err
 }
@@ -390,6 +453,10 @@ func decodeWatchdog(bytes []byte) *WatchdogConfig {
 
 // SetWatchdog writes via raw cmd 0x06 0x24.
 func (c *ipmitoolClient) SetWatchdog(ctx context.Context, cfg WatchdogConfig) error {
+	c.logStateChange(ctx, "SetWatchdog", map[string]any{
+		"action": string(cfg.Action), "timeout_seconds": cfg.TimeoutSeconds,
+		"stopped": cfg.Stopped, "log_event": cfg.LogEvent,
+	})
 	// Timer use byte: bits 2:0 = use type (4 = SMS/OS), bit 6 = don't stop
 	// (we use bit 6 set = stopped per spec), bit 7 = don't log.
 	use := byte(0x04) // SMS/OS
@@ -432,6 +499,7 @@ func (c *ipmitoolClient) SetWatchdog(ctx context.Context, cfg WatchdogConfig) er
 // ResetWatchdog runs cmd 0x06 0x22 — starts/restarts the timer with the
 // previously configured countdown.
 func (c *ipmitoolClient) ResetWatchdog(ctx context.Context) error {
+	c.logStateChange(ctx, "ResetWatchdog", nil)
 	_, err := c.run(ctx, "raw", "0x06", "0x22")
 	return err
 }
@@ -496,6 +564,7 @@ func (c *ipmitoolClient) GetSOL(ctx context.Context, channel uint8) (*SOLConfig,
 // ApplySOL writes only non-nil fields. Bitrate is written to both
 // volatile and non-volatile selectors (most users want them in sync).
 func (c *ipmitoolClient) ApplySOL(ctx context.Context, channel uint8, u SOLConfigUpdate) error {
+	c.logStateChange(ctx, "ApplySOL", map[string]any{"channel": channel})
 	write := func(sel uint8, data []byte) error {
 		args := []string{"raw", "0x0c", "0x21",
 			fmt.Sprintf("0x%02x", channel),
@@ -614,6 +683,9 @@ func (c *ipmitoolClient) ChassisIdentify(ctx context.Context, duration int, inde
 	if duration < 0 || duration > 255 {
 		return fmt.Errorf("duration must be 0..255 seconds")
 	}
+	c.logStateChange(ctx, "ChassisIdentify", map[string]any{
+		"duration_seconds": duration, "indefinite": indefinite,
+	})
 	args := []string{"raw", "0x00", "0x04", fmt.Sprintf("0x%02x", duration)}
 	if indefinite {
 		args = append(args, "0x01")
@@ -708,6 +780,17 @@ func (c *ipmitoolClient) GetLanConfig(ctx context.Context, channel uint8) (*LanC
 // "Set In Progress" dance — most BMCs accept direct writes and the
 // homelab use case doesn't need atomic multi-write.
 func (c *ipmitoolClient) ApplyLanConfig(ctx context.Context, channel uint8, u LanConfigUpdate) error {
+	fields := map[string]any{"channel": channel}
+	if u.IPSource != nil {
+		fields["ip_source"] = string(*u.IPSource)
+	}
+	if u.IPAddress != nil {
+		fields["ip_address"] = *u.IPAddress
+	}
+	if u.VLANID != nil {
+		fields["vlan_id"] = *u.VLANID
+	}
+	c.logStateChange(ctx, "ApplyLanConfig", fields)
 	write := func(sel uint8, data []byte) error {
 		args := []string{"raw", "0x0c", "0x01",
 			fmt.Sprintf("0x%02x", channel),
@@ -913,6 +996,11 @@ func decodeChannelAccess(bytes []byte) *ChannelAccess {
 // SetChannelAccess writes via raw cmd 0x06 0x40. PersistBoth issues two
 // writes (volatile then non-volatile).
 func (c *ipmitoolClient) SetChannelAccess(ctx context.Context, channel uint8, access ChannelAccess, persist ChannelPersistence) error {
+	c.logStateChange(ctx, "SetChannelAccess", map[string]any{
+		"channel": channel, "access_mode": string(access.AccessMode),
+		"privilege_limit": string(access.PrivilegeLimit),
+		"persist":         string(persist),
+	})
 	settings := encodeChannelAccessSettings(access)
 	priv := encodeChannelPriv(access.PrivilegeLimit)
 
@@ -982,11 +1070,15 @@ func encodeChannelPriv(p UserPrivilege) byte {
 // ──────────── User management ────────────
 
 func (c *ipmitoolClient) SetUserName(ctx context.Context, userID uint8, name string) error {
+	c.logStateChange(ctx, "SetUserName", map[string]any{"user_id": userID, "name": name})
 	_, err := c.run(ctx, "user", "set", "name", strconv.Itoa(int(userID)), name)
 	return err
 }
 
 func (c *ipmitoolClient) SetUserPassword(ctx context.Context, userID uint8, password string) error {
+	// Note: do NOT log the password itself. Only log that the operation
+	// happened against this user_id.
+	c.logStateChange(ctx, "SetUserPassword", map[string]any{"user_id": userID})
 	_, err := c.run(ctx, "user", "set", "password", strconv.Itoa(int(userID)), password)
 	return err
 }
@@ -996,16 +1088,21 @@ func (c *ipmitoolClient) SetUserPrivilege(ctx context.Context, userID, channel u
 	if !ok {
 		return fmt.Errorf("unsupported privilege %q", priv)
 	}
+	c.logStateChange(ctx, "SetUserPrivilege", map[string]any{
+		"user_id": userID, "channel": channel, "privilege": string(priv),
+	})
 	_, err := c.run(ctx, "user", "priv", strconv.Itoa(int(userID)), strconv.Itoa(level), strconv.Itoa(int(channel)))
 	return err
 }
 
 func (c *ipmitoolClient) EnableUser(ctx context.Context, userID uint8) error {
+	c.logStateChange(ctx, "EnableUser", map[string]any{"user_id": userID})
 	_, err := c.run(ctx, "user", "enable", strconv.Itoa(int(userID)))
 	return err
 }
 
 func (c *ipmitoolClient) DisableUser(ctx context.Context, userID uint8) error {
+	c.logStateChange(ctx, "DisableUser", map[string]any{"user_id": userID})
 	_, err := c.run(ctx, "user", "disable", strconv.Itoa(int(userID)))
 	return err
 }

@@ -3,8 +3,8 @@ package provider
 import (
 	"context"
 	"fmt"
-	"time"
 
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -31,7 +31,6 @@ type powerModel struct {
 	State              types.String `tfsdk:"state"`
 	PowerOffOnDestroy  types.Bool   `tfsdk:"power_off_on_destroy"`
 	CurrentState       types.String `tfsdk:"current_state"`
-	LastUpdated        types.String `tfsdk:"last_updated"`
 	ID                 types.String `tfsdk:"id"`
 }
 
@@ -67,10 +66,6 @@ func (r *powerResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 				Computed:    true,
 				Description: "Observed chassis power state at last read.",
 			},
-			"last_updated": schema.StringAttribute{
-				Computed:    true,
-				Description: "RFC3339 timestamp of the last SetPowerState call.",
-			},
 			"id": schema.StringAttribute{
 				Computed:    true,
 				Description: "Resource ID — `<host>:<port>` of the managed BMC.",
@@ -95,16 +90,16 @@ func (r *powerResource) Configure(_ context.Context, req resource.ConfigureReque
 func (r *powerResource) overrideFromPlan(p powerModel) ipmi.ConnectionParams {
 	return ipmi.ConnectionParams{
 		Host: p.Host.ValueString(), Username: p.Username.ValueString(),
-		Password: p.Password.ValueString(), Port: int(p.Port.ValueInt64()),
-		Interface: p.Interface.ValueString(), CipherSuite: int(p.CipherSuite.ValueInt64()),
+		Password: p.Password.ValueString(), Port: optionalIntPtr(p.Port),
+		Interface: p.Interface.ValueString(), CipherSuite: optionalIntPtr(p.CipherSuite),
 	}
 }
 
 func (r *powerResource) idFor(override ipmi.ConnectionParams) string {
 	merged := r.factory.Defaults.Merge(override)
-	port := merged.Port
-	if port == 0 {
-		port = 623
+	port := 623
+	if merged.Port != nil {
+		port = *merged.Port
 	}
 	return fmt.Sprintf("%s:%d", merged.Host, port)
 }
@@ -124,14 +119,26 @@ func (r *powerResource) Create(ctx context.Context, req resource.CreateRequest, 
 		return
 	}
 
-	status, err := client.GetChassisStatus(ctx)
-	if err != nil {
-		resp.Diagnostics.AddError("failed to refresh chassis status after Create", err.Error())
+	// Partial-state recovery (M-3): SetPowerState succeeded but the
+	// read-back fails (network blip, BMC mid-busy). Write state with
+	// current_state = "unknown" so Terraform records the resource as
+	// created — the next refresh recovers the real value. Without this,
+	// the resource would be marked tainted and the next apply would
+	// re-issue SetPowerState, risking a double power transition.
+	status, statusErr := client.GetChassisStatus(ctx)
+	if statusErr != nil {
+		plan.CurrentState = types.StringValue("unknown")
+		plan.ID = types.StringValue(r.idFor(override))
+		resp.Diagnostics.AddWarning(
+			"power: SetPowerState succeeded but status read-back failed",
+			"Resource created with current_state = \"unknown\". Refresh "+
+				"will recover. Read-back error: "+statusErr.Error(),
+		)
+		resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 		return
 	}
 
 	plan.CurrentState = types.StringValue(currentStateString(status.PowerOn))
-	plan.LastUpdated = types.StringValue(time.Now().UTC().Format(time.RFC3339))
 	plan.ID = types.StringValue(r.idFor(override))
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -169,13 +176,20 @@ func (r *powerResource) Update(ctx context.Context, req resource.UpdateRequest, 
 		return
 	}
 
-	status, err := client.GetChassisStatus(ctx)
-	if err != nil {
-		resp.Diagnostics.AddError("failed to refresh chassis status after Update", err.Error())
+	// Partial-state recovery (M-3): same pattern as Create.
+	status, statusErr := client.GetChassisStatus(ctx)
+	if statusErr != nil {
+		plan.CurrentState = types.StringValue("unknown")
+		plan.ID = types.StringValue(r.idFor(override))
+		resp.Diagnostics.AddWarning(
+			"power: SetPowerState succeeded but status read-back failed",
+			"Update wrote current_state = \"unknown\". Refresh will recover. "+
+				"Read-back error: "+statusErr.Error(),
+		)
+		resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 		return
 	}
 	plan.CurrentState = types.StringValue(currentStateString(status.PowerOn))
-	plan.LastUpdated = types.StringValue(time.Now().UTC().Format(time.RFC3339))
 	plan.ID = types.StringValue(r.idFor(override))
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -228,4 +242,15 @@ func (v oneOfValidator) ValidateString(_ context.Context, req validator.StringRe
 	}
 	resp.Diagnostics.AddAttributeError(req.Path, "invalid value",
 		fmt.Sprintf("got %q; want one of %v", got, v.allowed))
+}
+
+func (r *powerResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	host, port, err := parseHostPortID(req.ID)
+	if err != nil {
+		resp.Diagnostics.AddError("invalid import ID", err.Error())
+		return
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("host"), host)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("port"), int64(port))...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
 }

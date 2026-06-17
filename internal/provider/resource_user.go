@@ -3,13 +3,11 @@ package provider
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
-	stringpm "github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
@@ -34,15 +32,14 @@ type userModel struct {
 	Interface   types.String `tfsdk:"interface"`
 	CipherSuite types.Int64  `tfsdk:"cipher_suite"`
 
-	UserID            types.Int64  `tfsdk:"user_id"`
-	Name              types.String `tfsdk:"name"`
-	UserPassword      types.String `tfsdk:"user_password"`
-	Privilege         types.String `tfsdk:"privilege"`
-	Enabled           types.Bool   `tfsdk:"enabled"`
-	Channel           types.Int64  `tfsdk:"channel"`
-	ForceLockoutRisk  types.Bool   `tfsdk:"force_lockout_risk"`
-	LastUpdated       types.String `tfsdk:"last_updated"`
-	ID                types.String `tfsdk:"id"`
+	UserID                types.Int64  `tfsdk:"user_id"`
+	Name                  types.String `tfsdk:"name"`
+	UserPasswordWo        types.String `tfsdk:"user_password_wo"`
+	UserPasswordWoVersion types.String `tfsdk:"user_password_wo_version"`
+	Privilege             types.String `tfsdk:"privilege"`
+	Enabled               types.Bool   `tfsdk:"enabled"`
+	Channel               types.Int64  `tfsdk:"channel"`
+	ID                    types.String `tfsdk:"id"`
 }
 
 func (r *userResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -54,9 +51,17 @@ func (r *userResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 		Description: "Manage one IPMI user slot (typically slots 1–15). Includes a " +
 			"self-disable guard: if the user being modified matches the connection " +
 			"`username` and the plan would disable the slot, apply errors unless " +
-			"`force_lockout_risk = true` is set.\n\n" +
-			"**Note:** `user_password` is write-only — the BMC does not return it on " +
-			"reads, so the provider cannot detect out-of-band password changes.",
+			"`TF_IPMI_ALLOW_LOCKOUT=1` is set in the runner environment for the apply.\n\n" +
+			"**Password handling:** `user_password_wo` is **WriteOnly** — the secret " +
+			"is provided to the provider at apply time but never persisted to " +
+			"Terraform state. The companion `user_password_wo_version` (a normal " +
+			"attribute) is the trigger: whenever its value changes between plan " +
+			"and prior state, the provider sends the current `user_password_wo` " +
+			"to the BMC. Bump the version (e.g. `\"1\"` → `\"2\"`, or a hash of " +
+			"the secret) to rotate.\n\n" +
+			"**Terraform version:** this resource requires Terraform >= 1.11 for " +
+			"WriteOnly attribute support. Other resources in this provider still " +
+			"work on Terraform >= 1.5.",
 		Attributes: map[string]schema.Attribute{
 			"host":         schema.StringAttribute{Optional: true},
 			"username":     schema.StringAttribute{Optional: true},
@@ -76,13 +81,21 @@ func (r *userResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 				Required:    true,
 				Description: "Username string written to the slot.",
 			},
-			"user_password": schema.StringAttribute{
+			"user_password_wo": schema.StringAttribute{
 				Required:    true,
+				WriteOnly:   true,
 				Sensitive:   true,
-				Description: "Password set on the slot. Write-only — never returned by Read.",
-				PlanModifiers: []planmodifier.String{
-					stringpm.UseStateForUnknown(),
-				},
+				Description: "Password set on the BMC user slot. **WriteOnly** — " +
+					"the value lives only in config and is never persisted to state " +
+					"(requires Terraform >= 1.11). Sent to the BMC whenever " +
+					"`user_password_wo_version` changes.",
+			},
+			"user_password_wo_version": schema.StringAttribute{
+				Required: true,
+				Description: "Trigger for `user_password_wo`. Bump this string when " +
+					"you want the provider to rewrite the BMC user-slot password " +
+					"with the current `user_password_wo` value. Persisted to state " +
+					"(unlike the password itself).",
 			},
 			"privilege": schema.StringAttribute{
 				Required: true,
@@ -102,13 +115,7 @@ func (r *userResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 				Computed:    true,
 				Description: "Channel number this privilege applies to. Default 1.",
 			},
-			"force_lockout_risk": schema.BoolAttribute{
-				Optional: true,
-				Description: "Set to true to override lockout-safety errors when the plan would " +
-					"disable the connection user (which would lock Terraform out of the BMC).",
-			},
-			"last_updated": schema.StringAttribute{Computed: true},
-			"id":           schema.StringAttribute{Computed: true},
+			"id": schema.StringAttribute{Computed: true},
 		},
 	}
 }
@@ -130,8 +137,8 @@ func (r *userResource) Configure(_ context.Context, req resource.ConfigureReques
 //
 // The check compares the resource's `name` field against the connection
 // `username` (provider default merged with per-resource override). If
-// they match AND the plan disables the slot, the apply requires an
-// explicit force_lockout_risk = true opt-in.
+// they match AND the plan disables the slot, the apply requires
+// TF_IPMI_ALLOW_LOCKOUT=1 in the runner environment.
 func (r *userResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
 	if r.factory == nil || req.Plan.Raw.IsNull() {
 		// Nothing to check on destroy plan.
@@ -156,7 +163,8 @@ func (r *userResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRe
 			resourceName,
 		),
 	}
-	resp.Diagnostics.Append(enforceLockoutGuards(plan.ForceLockoutRisk, []lockoutCheck{selfDisable})...)
+	merged := r.factory.Defaults.Merge(r.overrideFromPlan(plan))
+	resp.Diagnostics.Append(enforceLockoutGuards(ctx, "ipmi_user", merged.Host, []lockoutCheck{selfDisable})...)
 }
 
 // connectionUser returns the username the BMC connection will use,
@@ -170,16 +178,16 @@ func (r *userResource) connectionUser(p userModel) string {
 func (r *userResource) overrideFromPlan(p userModel) ipmi.ConnectionParams {
 	return ipmi.ConnectionParams{
 		Host: p.Host.ValueString(), Username: p.Username.ValueString(),
-		Password: p.Password.ValueString(), Port: int(p.Port.ValueInt64()),
-		Interface: p.Interface.ValueString(), CipherSuite: int(p.CipherSuite.ValueInt64()),
+		Password: p.Password.ValueString(), Port: optionalIntPtr(p.Port),
+		Interface: p.Interface.ValueString(), CipherSuite: optionalIntPtr(p.CipherSuite),
 	}
 }
 
 func (r *userResource) idFor(override ipmi.ConnectionParams, userID, channel int64) string {
 	merged := r.factory.Defaults.Merge(override)
-	port := merged.Port
-	if port == 0 {
-		port = 623
+	port := 623
+	if merged.Port != nil {
+		port = *merged.Port
 	}
 	return fmt.Sprintf("%s:%d/ch%d/user%d", merged.Host, port, channel, userID)
 }
@@ -187,6 +195,13 @@ func (r *userResource) idFor(override ipmi.ConnectionParams, userID, channel int
 func (r *userResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan userModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	// WriteOnly values are only available in req.Config, never in
+	// req.Plan or req.State.
+	var config userModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -213,7 +228,7 @@ func (r *userResource) Create(ctx context.Context, req resource.CreateRequest, r
 		resp.Diagnostics.AddError("failed to set user name", err.Error())
 		return
 	}
-	if err := client.SetUserPassword(ctx, uint8(userID), plan.UserPassword.ValueString()); err != nil {
+	if err := client.SetUserPassword(ctx, uint8(userID), config.UserPasswordWo.ValueString()); err != nil {
 		resp.Diagnostics.AddError("failed to set user password", err.Error())
 		return
 	}
@@ -236,7 +251,6 @@ func (r *userResource) Create(ctx context.Context, req resource.CreateRequest, r
 
 	plan.Enabled = types.BoolValue(enabled)
 	plan.Channel = types.Int64Value(channel)
-	plan.LastUpdated = types.StringValue(time.Now().UTC().Format(time.RFC3339))
 	plan.ID = types.StringValue(r.idFor(override, userID, channel))
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -283,9 +297,14 @@ func (r *userResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 
 func (r *userResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	// Same as Create for the parts that matter — IPMI user mgmt is
-	// idempotent set-by-id semantics. Re-set everything.
-	var plan userModel
+	// idempotent set-by-id semantics. Re-set name / privilege / enabled
+	// every time; only re-set the BMC user-slot password when the
+	// `user_password_wo_version` trigger differs between plan and state
+	// (M-2 idempotency + Q9.5 WriteOnly).
+	var plan, state, config userModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -305,11 +324,14 @@ func (r *userResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		resp.Diagnostics.AddError("failed to set user name", err.Error())
 		return
 	}
-	// Only re-set password if changed (plan != state) — but framework gives
-	// us the plan value either way; setting always is safe + idempotent.
-	if err := client.SetUserPassword(ctx, uint8(userID), plan.UserPassword.ValueString()); err != nil {
-		resp.Diagnostics.AddError("failed to set user password", err.Error())
-		return
+	// Idempotent password rotation: only call SetUserPassword when the
+	// _wo_version trigger differs between plan and prior state. The
+	// password value itself lives in config (WriteOnly).
+	if !plan.UserPasswordWoVersion.Equal(state.UserPasswordWoVersion) {
+		if err := client.SetUserPassword(ctx, uint8(userID), config.UserPasswordWo.ValueString()); err != nil {
+			resp.Diagnostics.AddError("failed to set user password", err.Error())
+			return
+		}
 	}
 	priv := ipmi.UserPrivilege(plan.Privilege.ValueString())
 	if err := client.SetUserPrivilege(ctx, uint8(userID), uint8(channel), priv); err != nil {
@@ -329,7 +351,6 @@ func (r *userResource) Update(ctx context.Context, req resource.UpdateRequest, r
 	}
 	plan.Enabled = types.BoolValue(enabled)
 	plan.Channel = types.Int64Value(channel)
-	plan.LastUpdated = types.StringValue(time.Now().UTC().Format(time.RFC3339))
 	plan.ID = types.StringValue(r.idFor(override, userID, channel))
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -348,4 +369,17 @@ func (r *userResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 	if err := client.DisableUser(ctx, uint8(userID)); err != nil {
 		resp.Diagnostics.AddError("failed to disable user on destroy", err.Error())
 	}
+}
+
+func (r *userResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	host, port, channel, userID, err := parseHostPortChannelUserID(req.ID)
+	if err != nil {
+		resp.Diagnostics.AddError("invalid import ID", err.Error())
+		return
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("host"), host)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("port"), int64(port))...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("channel"), int64(channel))...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("user_id"), int64(userID))...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
 }

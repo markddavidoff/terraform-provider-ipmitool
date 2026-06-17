@@ -27,11 +27,12 @@ func TestAccUserResource_basic(t *testing.T) {
 			{
 				Config: providerHCL + `
 resource "ipmi_user" "tf_test" {
-  user_id       = 4
-  name          = "tftest"
-  user_password = "verylongtestpass1!"
-  privilege     = "user"
-  enabled       = true
+  user_id                  = 4
+  name                     = "tftest"
+  user_password_wo         = "verylongtestpass1!"
+  user_password_wo_version = "1"
+  privilege                = "user"
+  enabled                  = true
 }
 `,
 				Check: resource.ComposeAggregateTestCheckFunc(
@@ -47,11 +48,12 @@ resource "ipmi_user" "tf_test" {
 			{
 				Config: providerHCL + `
 resource "ipmi_user" "tf_test" {
-  user_id       = 4
-  name          = "tftest"
-  user_password = "verylongtestpass1!"
-  privilege     = "user"
-  enabled       = true
+  user_id                  = 4
+  name                     = "tftest"
+  user_password_wo         = "verylongtestpass1!"
+  user_password_wo_version = "1"
+  privilege                = "user"
+  enabled                  = true
 }
 `,
 				PlanOnly: true,
@@ -61,7 +63,8 @@ resource "ipmi_user" "tf_test" {
 }
 
 // TestAccUserResource_selfDisableBlocked verifies the lockout guard:
-// disabling the connection user without force_lockout_risk should error.
+// disabling the connection user without TF_IPMI_ALLOW_LOCKOUT=1 in the
+// runner env should error at plan time.
 //
 // Uses ExpectError to assert the diagnostic fires; nothing is actually
 // applied so the BMC's connection user stays untouched.
@@ -73,11 +76,12 @@ func TestAccUserResource_selfDisableBlocked(t *testing.T) {
 			{
 				Config: providerHCL + `
 resource "ipmi_user" "self" {
-  user_id       = 2
-  name          = var.ipmi_user
-  user_password = "ignored"
-  privilege     = "administrator"
-  enabled       = false
+  user_id                  = 2
+  name                     = var.ipmi_user
+  user_password_wo         = "ignored"
+  user_password_wo_version = "1"
+  privilege                = "administrator"
+  enabled                  = false
 }
 `,
 				ExpectError: regexpSelfDisable,

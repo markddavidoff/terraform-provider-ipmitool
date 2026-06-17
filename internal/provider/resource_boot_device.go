@@ -3,8 +3,8 @@ package provider
 import (
 	"context"
 	"fmt"
-	"time"
 
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -30,7 +30,6 @@ type bootDeviceModel struct {
 	Device      types.String `tfsdk:"device"`
 	Persistent  types.Bool   `tfsdk:"persistent"`
 	EFI         types.Bool   `tfsdk:"efi"`
-	LastUpdated types.String `tfsdk:"last_updated"`
 	ID          types.String `tfsdk:"id"`
 }
 
@@ -74,7 +73,6 @@ func (r *bootDeviceResource) Schema(_ context.Context, _ resource.SchemaRequest,
 				Computed:    true,
 				Description: "If true, UEFI boot. Default false (legacy BIOS).",
 			},
-			"last_updated": schema.StringAttribute{Computed: true},
 			"id":           schema.StringAttribute{Computed: true},
 		},
 	}
@@ -96,16 +94,16 @@ func (r *bootDeviceResource) Configure(_ context.Context, req resource.Configure
 func (r *bootDeviceResource) overrideFromPlan(p bootDeviceModel) ipmi.ConnectionParams {
 	return ipmi.ConnectionParams{
 		Host: p.Host.ValueString(), Username: p.Username.ValueString(),
-		Password: p.Password.ValueString(), Port: int(p.Port.ValueInt64()),
-		Interface: p.Interface.ValueString(), CipherSuite: int(p.CipherSuite.ValueInt64()),
+		Password: p.Password.ValueString(), Port: optionalIntPtr(p.Port),
+		Interface: p.Interface.ValueString(), CipherSuite: optionalIntPtr(p.CipherSuite),
 	}
 }
 
 func (r *bootDeviceResource) idFor(override ipmi.ConnectionParams) string {
 	merged := r.factory.Defaults.Merge(override)
-	port := merged.Port
-	if port == 0 {
-		port = 623
+	port := 623
+	if merged.Port != nil {
+		port = *merged.Port
 	}
 	return fmt.Sprintf("%s:%d", merged.Host, port)
 }
@@ -130,7 +128,6 @@ func (r *bootDeviceResource) Create(ctx context.Context, req resource.CreateRequ
 
 	plan.Persistent = types.BoolValue(persistent)
 	plan.EFI = types.BoolValue(efi)
-	plan.LastUpdated = types.StringValue(time.Now().UTC().Format(time.RFC3339))
 	plan.ID = types.StringValue(r.idFor(override))
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -191,7 +188,6 @@ func (r *bootDeviceResource) Update(ctx context.Context, req resource.UpdateRequ
 	}
 	plan.Persistent = types.BoolValue(persistent)
 	plan.EFI = types.BoolValue(efi)
-	plan.LastUpdated = types.StringValue(time.Now().UTC().Format(time.RFC3339))
 	plan.ID = types.StringValue(r.idFor(override))
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -208,4 +204,15 @@ func (r *bootDeviceResource) Delete(ctx context.Context, req resource.DeleteRequ
 	if err := client.SetBootDevice(ctx, ipmi.BootDeviceNone, false, false); err != nil {
 		resp.Diagnostics.AddError("failed to clear boot device on destroy", err.Error())
 	}
+}
+
+func (r *bootDeviceResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	host, port, err := parseHostPortID(req.ID)
+	if err != nil {
+		resp.Diagnostics.AddError("invalid import ID", err.Error())
+		return
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("host"), host)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("port"), int64(port))...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
 }

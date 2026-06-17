@@ -3,8 +3,8 @@ package provider
 import (
 	"context"
 	"fmt"
-	"time"
 
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -31,7 +31,6 @@ type watchdogModel struct {
 	LogEvent       types.Bool   `tfsdk:"log_event"`
 	StartOnApply   types.Bool   `tfsdk:"start_on_apply"`
 	Running        types.Bool   `tfsdk:"running"`
-	LastUpdated    types.String `tfsdk:"last_updated"`
 	ID             types.String `tfsdk:"id"`
 }
 
@@ -83,7 +82,6 @@ func (r *watchdogResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				Computed:    true,
 				Description: "True when the BMC reports a non-zero present countdown and the timer isn't stopped.",
 			},
-			"last_updated": schema.StringAttribute{Computed: true},
 			"id":           schema.StringAttribute{Computed: true},
 		},
 	}
@@ -105,16 +103,16 @@ func (r *watchdogResource) Configure(_ context.Context, req resource.ConfigureRe
 func (r *watchdogResource) overrideFromPlan(p watchdogModel) ipmi.ConnectionParams {
 	return ipmi.ConnectionParams{
 		Host: p.Host.ValueString(), Username: p.Username.ValueString(),
-		Password: p.Password.ValueString(), Port: int(p.Port.ValueInt64()),
-		Interface: p.Interface.ValueString(), CipherSuite: int(p.CipherSuite.ValueInt64()),
+		Password: p.Password.ValueString(), Port: optionalIntPtr(p.Port),
+		Interface: p.Interface.ValueString(), CipherSuite: optionalIntPtr(p.CipherSuite),
 	}
 }
 
 func (r *watchdogResource) idFor(override ipmi.ConnectionParams) string {
 	merged := r.factory.Defaults.Merge(override)
-	port := merged.Port
-	if port == 0 {
-		port = 623
+	port := 623
+	if merged.Port != nil {
+		port = *merged.Port
 	}
 	return fmt.Sprintf("%s:%d/watchdog", merged.Host, port)
 }
@@ -158,7 +156,6 @@ func (r *watchdogResource) writeFromPlan(ctx context.Context, plan *watchdogMode
 	plan.Stopped = types.BoolValue(current.Stopped)
 	plan.LogEvent = types.BoolValue(current.LogEvent)
 	plan.Running = types.BoolValue(current.Running)
-	plan.LastUpdated = types.StringValue(time.Now().UTC().Format(time.RFC3339))
 	plan.ID = types.StringValue(r.idFor(r.overrideFromPlan(*plan)))
 	return nil
 }
@@ -222,4 +219,15 @@ func (r *watchdogResource) Delete(ctx context.Context, req resource.DeleteReques
 	}); err != nil {
 		resp.Diagnostics.AddError("failed to stop watchdog on destroy", err.Error())
 	}
+}
+
+func (r *watchdogResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	host, port, err := parseHostPortID(req.ID)
+	if err != nil {
+		resp.Diagnostics.AddError("invalid import ID", err.Error())
+		return
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("host"), host)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("port"), int64(port))...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
 }

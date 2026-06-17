@@ -3,8 +3,8 @@ package provider
 import (
 	"context"
 	"fmt"
-	"time"
 
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -27,7 +27,6 @@ type chassisIdentifyModel struct {
 	DurationSeconds types.Int64  `tfsdk:"duration_seconds"`
 	Indefinite      types.Bool   `tfsdk:"indefinite"`
 	OffOnDestroy    types.Bool   `tfsdk:"off_on_destroy"`
-	LastUpdated     types.String `tfsdk:"last_updated"`
 	ID              types.String `tfsdk:"id"`
 }
 
@@ -65,7 +64,6 @@ func (r *chassisIdentifyResource) Schema(_ context.Context, _ resource.SchemaReq
 				Description: "If true (default), `terraform destroy` clears the LED. Set false to leave " +
 					"the LED in whatever state the BMC last ran.",
 			},
-			"last_updated": schema.StringAttribute{Computed: true},
 			"id":           schema.StringAttribute{Computed: true},
 		},
 	}
@@ -87,16 +85,16 @@ func (r *chassisIdentifyResource) Configure(_ context.Context, req resource.Conf
 func (r *chassisIdentifyResource) overrideFromPlan(p chassisIdentifyModel) ipmi.ConnectionParams {
 	return ipmi.ConnectionParams{
 		Host: p.Host.ValueString(), Username: p.Username.ValueString(),
-		Password: p.Password.ValueString(), Port: int(p.Port.ValueInt64()),
-		Interface: p.Interface.ValueString(), CipherSuite: int(p.CipherSuite.ValueInt64()),
+		Password: p.Password.ValueString(), Port: optionalIntPtr(p.Port),
+		Interface: p.Interface.ValueString(), CipherSuite: optionalIntPtr(p.CipherSuite),
 	}
 }
 
 func (r *chassisIdentifyResource) idFor(override ipmi.ConnectionParams) string {
 	merged := r.factory.Defaults.Merge(override)
-	port := merged.Port
-	if port == 0 {
-		port = 623
+	port := 623
+	if merged.Port != nil {
+		port = *merged.Port
 	}
 	return fmt.Sprintf("%s:%d/identify", merged.Host, port)
 }
@@ -116,7 +114,6 @@ func (r *chassisIdentifyResource) writeFromPlan(ctx context.Context, plan *chass
 	}
 	plan.DurationSeconds = types.Int64Value(int64(duration))
 	plan.Indefinite = types.BoolValue(indefinite)
-	plan.LastUpdated = types.StringValue(time.Now().UTC().Format(time.RFC3339))
 	plan.ID = types.StringValue(r.idFor(r.overrideFromPlan(*plan)))
 	return nil
 }
@@ -178,4 +175,15 @@ func (r *chassisIdentifyResource) Delete(ctx context.Context, req resource.Delet
 	if err := client.ChassisIdentify(ctx, 0, false); err != nil {
 		resp.Diagnostics.AddError("failed to clear chassis identify on destroy", err.Error())
 	}
+}
+
+func (r *chassisIdentifyResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	host, port, err := parseHostPortID(req.ID)
+	if err != nil {
+		resp.Diagnostics.AddError("invalid import ID", err.Error())
+		return
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("host"), host)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("port"), int64(port))...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
 }

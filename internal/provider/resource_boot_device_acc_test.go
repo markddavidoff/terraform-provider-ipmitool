@@ -26,7 +26,6 @@ resource "ipmi_boot_device" "test" {
 					resource.TestCheckResourceAttr("ipmi_boot_device.test", "device", "none"),
 					resource.TestCheckResourceAttr("ipmi_boot_device.test", "persistent", "false"),
 					resource.TestCheckResourceAttrSet("ipmi_boot_device.test", "id"),
-					resource.TestCheckResourceAttrSet("ipmi_boot_device.test", "last_updated"),
 				),
 			},
 			// Drift check: same config should plan as no-op.

@@ -3,7 +3,6 @@ package provider
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -36,14 +35,12 @@ type lanModel struct {
 	SubnetMask       types.String `tfsdk:"subnet_mask"`
 	DefaultGateway   types.String `tfsdk:"default_gateway"`
 	BackupGateway    types.String `tfsdk:"backup_gateway"`
-	VLANID           types.Int64  `tfsdk:"vlan_id"`
-	VLANEnabled      types.Bool   `tfsdk:"vlan_enabled"`
-	VLANPriority     types.Int64  `tfsdk:"vlan_priority"`
-	PrimaryRMCPPort  types.Int64  `tfsdk:"primary_rmcp_port"`
-	MACAddress       types.String `tfsdk:"mac_address"`
-	ForceLockoutRisk types.Bool   `tfsdk:"force_lockout_risk"`
-	LastUpdated      types.String `tfsdk:"last_updated"`
-	ID               types.String `tfsdk:"id"`
+	VLANID          types.Int64  `tfsdk:"vlan_id"`
+	VLANEnabled     types.Bool   `tfsdk:"vlan_enabled"`
+	VLANPriority    types.Int64  `tfsdk:"vlan_priority"`
+	PrimaryRMCPPort types.Int64  `tfsdk:"primary_rmcp_port"`
+	MACAddress      types.String `tfsdk:"mac_address"`
+	ID              types.String `tfsdk:"id"`
 }
 
 func (r *lanResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -56,8 +53,8 @@ func (r *lanResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 			"omitted fields are left alone on the BMC. Reads are per-selector and tolerate " +
 			"BMCs that don't implement every parameter (POC 3 found R210 II supports 20 of 24).\n\n" +
 			"**Lockout warning:** changing `ip_address`, `ip_source`, or `vlan_id` on channel 1 " +
-			"can break the provider's BMC connection. This resource requires explicit " +
-			"`force_lockout_risk = true` for those changes on channel 1.",
+			"can break the provider's BMC connection. The plan is blocked unless " +
+			"`TF_IPMI_ALLOW_LOCKOUT=1` is set in the runner environment for the apply.",
 		Attributes: map[string]schema.Attribute{
 			"host":         schema.StringAttribute{Optional: true},
 			"username":     schema.StringAttribute{Optional: true},
@@ -116,12 +113,7 @@ func (r *lanResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 				Computed:    true,
 				Description: "Read-only MAC address of the BMC interface.",
 			},
-			"force_lockout_risk": schema.BoolAttribute{
-				Optional: true,
-				Description: "Set true to override the channel-1 IP/VLAN lockout guard.",
-			},
-			"last_updated": schema.StringAttribute{Computed: true},
-			"id":           schema.StringAttribute{Computed: true},
+			"id": schema.StringAttribute{Computed: true},
 		},
 	}
 }
@@ -142,8 +134,8 @@ func (r *lanResource) Configure(_ context.Context, req resource.ConfigureRequest
 // ModifyPlan triggers the IP-self-lockout guard on channel 1 when the
 // plan changes ip_address, ip_source, or vlan_id from the prior state.
 func (r *lanResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
-	if req.Plan.Raw.IsNull() {
-		return // destroy
+	if r.factory == nil || req.Plan.Raw.IsNull() {
+		return // destroy or not configured yet
 	}
 	var plan lanModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -209,22 +201,23 @@ func (r *lanResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanReq
 		}
 	}
 
-	resp.Diagnostics.Append(enforceLockoutGuards(plan.ForceLockoutRisk, checks)...)
+	merged := r.factory.Defaults.Merge(r.overrideFromPlan(plan))
+	resp.Diagnostics.Append(enforceLockoutGuards(ctx, "ipmi_lan", merged.Host, checks)...)
 }
 
 func (r *lanResource) overrideFromPlan(p lanModel) ipmi.ConnectionParams {
 	return ipmi.ConnectionParams{
 		Host: p.Host.ValueString(), Username: p.Username.ValueString(),
-		Password: p.Password.ValueString(), Port: int(p.Port.ValueInt64()),
-		Interface: p.Interface.ValueString(), CipherSuite: int(p.CipherSuite.ValueInt64()),
+		Password: p.Password.ValueString(), Port: optionalIntPtr(p.Port),
+		Interface: p.Interface.ValueString(), CipherSuite: optionalIntPtr(p.CipherSuite),
 	}
 }
 
 func (r *lanResource) idFor(override ipmi.ConnectionParams, channel int64) string {
 	merged := r.factory.Defaults.Merge(override)
-	port := merged.Port
-	if port == 0 {
-		port = 623
+	port := 623
+	if merged.Port != nil {
+		port = *merged.Port
 	}
 	return fmt.Sprintf("%s:%d/ch%d/lan", merged.Host, port, channel)
 }
@@ -297,7 +290,6 @@ func (r *lanResource) Create(ctx context.Context, req resource.CreateRequest, re
 		return
 	}
 	r.applyConfigToState(&plan, cfg)
-	plan.LastUpdated = types.StringValue(time.Now().UTC().Format(time.RFC3339))
 	plan.ID = types.StringValue(r.idFor(override, ch))
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -342,7 +334,6 @@ func (r *lanResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		return
 	}
 	r.applyConfigToState(&plan, cfg)
-	plan.LastUpdated = types.StringValue(time.Now().UTC().Format(time.RFC3339))
 	plan.ID = types.StringValue(r.idFor(override, int64(ch)))
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -418,4 +409,16 @@ func (r *lanResource) applyConfigToState(m *lanModel, cfg *ipmi.LanConfig) {
 	if m.PrimaryRMCPPort.IsUnknown() {
 		m.PrimaryRMCPPort = types.Int64Null()
 	}
+}
+
+func (r *lanResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	host, port, channel, err := parseHostPortChannelID(req.ID)
+	if err != nil {
+		resp.Diagnostics.AddError("invalid import ID", err.Error())
+		return
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("host"), host)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("port"), int64(port))...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("channel"), int64(channel))...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
 }

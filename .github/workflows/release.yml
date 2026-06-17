@@ -1,15 +1,32 @@
-# Tag-driven release workflow.
+# Tag-driven release workflow — pragmatic split into two jobs:
+#
+#   build: validates that the release configuration produces artifacts
+#          successfully, WITHOUT decrypting any GPG material. Runs a
+#          --snapshot release that skips publish/sign/sbom. If this
+#          fails the `sign` job (which needs:) never runs and the GPG
+#          secrets are never injected into the workflow.
+#
+#   sign:  the actual release. Imports GPG, runs the full goreleaser
+#          release flow (build + archive + checksum + sbom + sign +
+#          publish), then attests build provenance via Sigstore.
+#
+# This split limits the blast radius of a compromised action in the
+# build phase: it gets RCE on the runner but can never touch
+# GPG_PRIVATE_KEY / PASSPHRASE because those secrets are scoped to
+# the sign job's env. Note that GoReleaser does not support
+# "build once, sign later" — the sign job re-builds from source.
+# That's a GoReleaser architecture constraint, not a workflow design
+# choice; the protection here is GPG-scope isolation, not artifact-byte
+# isolation.
 #
 # Triggered when a tag matching `v*` is pushed:
-#   git tag -a v0.1.0 -m "v0.1.0"
-#   git push origin v0.1.0
+#   git tag -s v0.2.0 -m "v0.2.0"
+#   git push origin v0.2.0
 #
-# Requires repo secrets (Settings → Secrets → Actions):
+# Required repo secrets (Settings → Secrets → Actions):
 #   GPG_PRIVATE_KEY   ASCII-armored, passphrase-encrypted private key
 #                     (gpg --armor --export-secret-keys $FINGERPRINT)
 #   PASSPHRASE        the GPG key passphrase
-#
-# The fingerprint is derived from the imported key at runtime — no extra secret needed.
 
 name: release
 
@@ -19,33 +36,77 @@ on:
       - 'v*'
 
 permissions:
-  contents: write   # needed to upload release artifacts
+  contents: read
 
 jobs:
-  goreleaser:
+  build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # v6.0.3
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
         with:
           go-version-file: 'go.mod'
           cache: true
 
+      # Snapshot release validates the full chain (build matrix,
+      # archives, checksums) without needing GPG. If this fails the
+      # sign job (needs:) doesn't run.
+      - name: Validate release flow (snapshot, no sign)
+        uses: goreleaser/goreleaser-action@5daf1e915a5f0af01ddbcd89a43b8061ff4f1a89  # v7.2.2
+        with:
+          version: '~> v2'
+          args: release --snapshot --clean --skip=publish,sign,sbom
+
+  sign:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write       # publish the GitHub Release
+      id-token: write       # SLSA OIDC attestation
+      attestations: write   # write the attestation
+    steps:
+      - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # v6.0.3
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      # Syft is required by GoReleaser's sboms: block (Syft is the SBOM
+      # generator behind it). GitHub-hosted runners do not pre-install
+      # syft. Pin the syft version explicitly — GoReleaser passes the
+      # --enrich flag which requires Syft >= 1.16.
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@f6c3d0fe42c3cf876e3462574e4c9416b5e0f07a  # v0.9.0
+        with:
+          syft-version: v1.20.0
+
       - name: Import GPG key
         id: import_gpg
-        uses: crazy-max/ghaction-import-gpg@v7
+        uses: crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd  # v7.0.0
         with:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.PASSPHRASE }}
 
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v7
+      - name: Release (build + archive + checksum + sbom + sign + publish)
+        uses: goreleaser/goreleaser-action@5daf1e915a5f0af01ddbcd89a43b8061ff4f1a89  # v7.2.2
         with:
           version: '~> v2'
           args: release --clean
         env:
           GPG_FINGERPRINT: ${{ steps.import_gpg.outputs.fingerprint }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Attest build provenance (SLSA)
+        uses: actions/attest-build-provenance@62fc1d596301d0ab9914e1fec14dc5c8d93f65cd  # v3.2.0
+        with:
+          subject-path: |
+            dist/*.zip
+            dist/*_SHA256SUMS

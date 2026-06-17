@@ -3,7 +3,6 @@ package provider
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -34,12 +33,10 @@ type channelAccessModel struct {
 	AccessMode       types.String `tfsdk:"access_mode"`
 	UserLevelAuth    types.Bool   `tfsdk:"user_level_auth"`
 	PerMessageAuth   types.Bool   `tfsdk:"per_message_auth"`
-	PEFAlerting      types.Bool   `tfsdk:"pef_alerting"`
-	PrivilegeLimit   types.String `tfsdk:"privilege_limit"`
-	Persistence      types.String `tfsdk:"persistence"`
-	ForceLockoutRisk types.Bool   `tfsdk:"force_lockout_risk"`
-	LastUpdated      types.String `tfsdk:"last_updated"`
-	ID               types.String `tfsdk:"id"`
+	PEFAlerting    types.Bool   `tfsdk:"pef_alerting"`
+	PrivilegeLimit types.String `tfsdk:"privilege_limit"`
+	Persistence    types.String `tfsdk:"persistence"`
+	ID             types.String `tfsdk:"id"`
 }
 
 func (r *channelAccessResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -51,8 +48,8 @@ func (r *channelAccessResource) Schema(_ context.Context, _ resource.SchemaReque
 		Description: "Manage Set Channel Access for one channel — controls whether IPMI-over-LAN " +
 			"is enabled, what authentication is required, and the max privilege level.\n\n" +
 			"**Lockout warning:** setting `access_mode = \"disabled\"` on channel 1 (the standard " +
-			"LAN channel) will lock Terraform out of the BMC. This resource requires an explicit " +
-			"`force_lockout_risk = true` to allow it.",
+			"LAN channel) will lock Terraform out of the BMC. The plan is blocked unless " +
+			"`TF_IPMI_ALLOW_LOCKOUT=1` is set in the runner environment for the apply.",
 		Attributes: map[string]schema.Attribute{
 			"host":         schema.StringAttribute{Optional: true},
 			"username":     schema.StringAttribute{Optional: true},
@@ -100,13 +97,7 @@ func (r *channelAccessResource) Schema(_ context.Context, _ resource.SchemaReque
 					"or `both` (default). Reads always return the volatile/active settings.",
 				Validators: []validator.String{oneOf("volatile", "non_volatile", "both")},
 			},
-			"force_lockout_risk": schema.BoolAttribute{
-				Optional: true,
-				Description: "Set to true to override the channel-1 self-lockout guard. " +
-					"Without it, disabling LAN access on the channel Terraform uses is blocked.",
-			},
-			"last_updated": schema.StringAttribute{Computed: true},
-			"id":           schema.StringAttribute{Computed: true},
+			"id": schema.StringAttribute{Computed: true},
 		},
 	}
 }
@@ -128,12 +119,12 @@ func (r *channelAccessResource) Configure(_ context.Context, req resource.Config
 //
 // The simple, defensible rule: if the plan would set `access_mode =
 // "disabled"` on **channel 1** (the standard LAN channel Terraform
-// authenticates over by default), require force_lockout_risk = true.
+// authenticates over by default), require TF_IPMI_ALLOW_LOCKOUT=1.
 // This is conservative — users on non-standard channels are responsible
 // for knowing if they're cutting their own connection.
 func (r *channelAccessResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
-	if req.Plan.Raw.IsNull() {
-		return // destroy
+	if r.factory == nil || req.Plan.Raw.IsNull() {
+		return // destroy or not configured yet
 	}
 	var plan channelAccessModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -149,22 +140,23 @@ func (r *channelAccessResource) ModifyPlan(ctx context.Context, req resource.Mod
 			"channel Terraform connects through. The BMC will reject all subsequent IPMI " +
 			"sessions until access is re-enabled via the host's serial console or BIOS.",
 	}
-	resp.Diagnostics.Append(enforceLockoutGuards(plan.ForceLockoutRisk, []lockoutCheck{check})...)
+	merged := r.factory.Defaults.Merge(r.overrideFromPlan(plan))
+	resp.Diagnostics.Append(enforceLockoutGuards(ctx, "ipmi_channel_access", merged.Host, []lockoutCheck{check})...)
 }
 
 func (r *channelAccessResource) overrideFromPlan(p channelAccessModel) ipmi.ConnectionParams {
 	return ipmi.ConnectionParams{
 		Host: p.Host.ValueString(), Username: p.Username.ValueString(),
-		Password: p.Password.ValueString(), Port: int(p.Port.ValueInt64()),
-		Interface: p.Interface.ValueString(), CipherSuite: int(p.CipherSuite.ValueInt64()),
+		Password: p.Password.ValueString(), Port: optionalIntPtr(p.Port),
+		Interface: p.Interface.ValueString(), CipherSuite: optionalIntPtr(p.CipherSuite),
 	}
 }
 
 func (r *channelAccessResource) idFor(override ipmi.ConnectionParams, channel int64) string {
 	merged := r.factory.Defaults.Merge(override)
-	port := merged.Port
-	if port == 0 {
-		port = 623
+	port := 623
+	if merged.Port != nil {
+		port = *merged.Port
 	}
 	return fmt.Sprintf("%s:%d/ch%d/access", merged.Host, port, channel)
 }
@@ -228,7 +220,6 @@ func (r *channelAccessResource) Create(ctx context.Context, req resource.CreateR
 	plan.PEFAlerting = types.BoolValue(access.PEFAlerting)
 	plan.PrivilegeLimit = types.StringValue(string(access.PrivilegeLimit))
 	plan.Persistence = types.StringValue(string(persist))
-	plan.LastUpdated = types.StringValue(time.Now().UTC().Format(time.RFC3339))
 	plan.ID = types.StringValue(r.idFor(override, ch))
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -278,7 +269,6 @@ func (r *channelAccessResource) Update(ctx context.Context, req resource.UpdateR
 	plan.PEFAlerting = types.BoolValue(access.PEFAlerting)
 	plan.PrivilegeLimit = types.StringValue(string(access.PrivilegeLimit))
 	plan.Persistence = types.StringValue(string(persist))
-	plan.LastUpdated = types.StringValue(time.Now().UTC().Format(time.RFC3339))
 	plan.ID = types.StringValue(r.idFor(override, int64(ch)))
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -287,4 +277,16 @@ func (r *channelAccessResource) Update(ctx context.Context, req resource.UpdateR
 // state was, and reverting to a "default" would itself be risky. Removing
 // the resource from state leaves BMC settings alone.
 func (r *channelAccessResource) Delete(_ context.Context, _ resource.DeleteRequest, _ *resource.DeleteResponse) {
+}
+
+func (r *channelAccessResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	host, port, channel, err := parseHostPortChannelID(req.ID)
+	if err != nil {
+		resp.Diagnostics.AddError("invalid import ID", err.Error())
+		return
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("host"), host)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("port"), int64(port))...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("channel"), int64(channel))...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
 }

@@ -1,0 +1,7 @@
+# Default reviewer for all changes
+* @markddavidoff
+
+# CI and release-pipeline changes require explicit review
+/.github/ @markddavidoff
+/.goreleaser.yml @markddavidoff
+/docs/RELEASING.md @markddavidoff
