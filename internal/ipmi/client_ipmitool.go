@@ -16,12 +16,13 @@ import (
 // exit. No long-lived sessions, no keepalives — sidesteps the POC 1
 // session-lifecycle problem.
 type ipmitoolClient struct {
-	binary string
-	params ConnectionParams
+	binary  string
+	params  ConnectionParams
+	factory *ClientFactory // nil in tests; non-nil in production (carries per-host semaphores)
 }
 
-func newIpmitoolClient(binary string, params ConnectionParams) *ipmitoolClient {
-	return &ipmitoolClient{binary: binary, params: params}
+func newIpmitoolClient(binary string, params ConnectionParams, factory *ClientFactory) *ipmitoolClient {
+	return &ipmitoolClient{binary: binary, params: params, factory: factory}
 }
 
 // run executes ipmitool with the configured connection args and the
@@ -47,6 +48,15 @@ func (c *ipmitoolClient) run(ctx context.Context, args ...string) (string, error
 	if c.params.CipherSuite != nil {
 		cipher = *c.params.CipherSuite
 	}
+	// Per-host concurrency cap (M-7). Acquire a slot before spawning the
+	// subprocess and hold it across all retry attempts — better than
+	// releasing-and-reacquiring on each retry, which would let other
+	// goroutines pile on while we're already in a retry backoff.
+	if c.factory != nil {
+		sem := c.factory.acquire(c.params.Host)
+		defer c.factory.release(sem)
+	}
+
 	// Password is handed off via the IPMI_PASSWORD env var (-E flag)
 	// instead of -P on argv. -P leaks the password into `ps`, /proc, and
 	// process accounting. Closes C-1 from the v0.2 security review.

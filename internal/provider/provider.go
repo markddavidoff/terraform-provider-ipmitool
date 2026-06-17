@@ -31,14 +31,15 @@ type ipmiProvider struct {
 
 // providerConfigModel mirrors the provider block schema for tfsdk decode.
 type providerConfigModel struct {
-	Host                 types.String `tfsdk:"host"`
-	Username             types.String `tfsdk:"username"`
-	Password             types.String `tfsdk:"password"`
-	Port                 types.Int64  `tfsdk:"port"`
-	Interface            types.String `tfsdk:"interface"`
-	CipherSuite          types.Int64  `tfsdk:"cipher_suite"`
-	TimeoutSeconds       types.Int64  `tfsdk:"timeout_seconds"`
-	AllowUnauthenticated types.Bool   `tfsdk:"allow_unauthenticated"`
+	Host                     types.String `tfsdk:"host"`
+	Username                 types.String `tfsdk:"username"`
+	Password                 types.String `tfsdk:"password"`
+	Port                     types.Int64  `tfsdk:"port"`
+	Interface                types.String `tfsdk:"interface"`
+	CipherSuite              types.Int64  `tfsdk:"cipher_suite"`
+	TimeoutSeconds           types.Int64  `tfsdk:"timeout_seconds"`
+	AllowUnauthenticated     types.Bool   `tfsdk:"allow_unauthenticated"`
+	MaxConcurrentCallsPerHost types.Int64 `tfsdk:"max_concurrent_calls_per_host"`
 }
 
 func (p *ipmiProvider) Metadata(_ context.Context, _ provider.MetadataRequest, resp *provider.MetadataResponse) {
@@ -98,6 +99,13 @@ func (p *ipmiProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp 
 					"Setting cipher_suite = 0 without this flag is a Configure-" +
 					"time error. Never set this for production.",
 			},
+			"max_concurrent_calls_per_host": schema.Int64Attribute{
+				Optional: true,
+				Description: "Maximum concurrent ipmitool subprocesses per " +
+					"host. Defaults to 3 (safe for iDRAC6 session table). " +
+					"Raise for modern BMCs: 8 for iDRAC7+, 16+ for " +
+					"SuperMicro X10+ / AsRock Rack.",
+			},
 		},
 	}
 }
@@ -155,7 +163,8 @@ func (p *ipmiProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 	}
 
 	factory := &ipmi.ClientFactory{
-		IpmitoolPath: binaryPath,
+		IpmitoolPath:         binaryPath,
+		MaxConcurrentPerHost: intOr(data.MaxConcurrentCallsPerHost, 3),
 		Defaults: ipmi.ConnectionParams{
 			Host:        data.Host.ValueString(),
 			Username:    data.Username.ValueString(),

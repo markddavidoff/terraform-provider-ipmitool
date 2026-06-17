@@ -8,7 +8,10 @@
 // bmc-toolbox/bmclib for the same use case.
 package ipmi
 
-import "context"
+import (
+	"context"
+	"sync"
+)
 
 // ConnectionParams are the per-resource (or provider-default) settings
 // needed to talk to a single BMC. Resources merge their per-resource
@@ -335,10 +338,39 @@ type BMCClient interface {
 // The MockFn field is the unit-test injection point: tests construct a
 // ClientFactory{MockFn: func(p) BMCClient { return &MockBMCClient{...} }}
 // and pass it to the resource directly.
+//
+// MaxConcurrentPerHost caps how many ipmitool subprocesses can be in
+// flight against a single BMC at once. Defaults to 3 — sized for the
+// iDRAC6 session table (the empirical small-fleet failure mode Devon
+// flagged). Raise to 8 for iDRAC7+, 16+ for SuperMicro X10+ /
+// AsRock Rack. Zero or negative falls back to 3.
 type ClientFactory struct {
-	IpmitoolPath string
-	Defaults     ConnectionParams
-	MockFn       func(ConnectionParams) BMCClient
+	IpmitoolPath         string
+	Defaults             ConnectionParams
+	MaxConcurrentPerHost int
+	MockFn               func(ConnectionParams) BMCClient
+
+	semaphores sync.Map // host string -> chan struct{} (capacity = MaxConcurrentPerHost)
+}
+
+// acquire blocks until a slot is available for the given host, then
+// returns the semaphore channel. Callers must call release(sem).
+// The semaphore is keyed by the merged host string, so per-resource
+// connection-override hosts share a slot pool with the provider-block
+// host if (and only if) they are byte-identical strings.
+func (f *ClientFactory) acquire(host string) chan struct{} {
+	cap := f.MaxConcurrentPerHost
+	if cap <= 0 {
+		cap = 3
+	}
+	sem, _ := f.semaphores.LoadOrStore(host, make(chan struct{}, cap))
+	c := sem.(chan struct{})
+	c <- struct{}{}
+	return c
+}
+
+func (f *ClientFactory) release(sem chan struct{}) {
+	<-sem
 }
 
 func (f *ClientFactory) New(override ConnectionParams) BMCClient {
@@ -346,5 +378,5 @@ func (f *ClientFactory) New(override ConnectionParams) BMCClient {
 	if f.MockFn != nil {
 		return f.MockFn(params)
 	}
-	return newIpmitoolClient(f.IpmitoolPath, params)
+	return newIpmitoolClient(f.IpmitoolPath, params, f)
 }
