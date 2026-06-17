@@ -5,7 +5,53 @@ All notable changes to this provider will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.0] — 2026-06-17
+## [0.2.2] — 2026-06-17
+
+**v0.2.2 is the first Registry-published v0.2 release.** Functionally
+identical to v0.2.1 except the SBOM regression below.
+
+### Fixed
+
+- **SBOMs removed from the release artifacts.** GoReleaser v2
+  unconditionally includes generated `.spdx.json` files in `SHA256SUMS`,
+  and there's no `checksum.disable_sbom` flag. The Terraform Registry's
+  release-import flow rejects any `SHA256SUMS` entry it doesn't have a
+  slot for, so the extra SPDX rows caused both v0.2.0 and v0.2.1 to fail
+  Registry indexing with *"missing files in request body"*. Dropping the
+  `sboms:` block from `.goreleaser.yml` (and the `Install Syft` step from
+  `release.yml`) restores Registry compatibility.
+- **v0.2.0 and v0.2.1 GitHub Releases were deleted** because they were
+  unusable through the Registry. Their CHANGELOG entries are preserved
+  below with a ⚠️ banner so the change history stays auditable. Their
+  git tags were also deleted.
+
+### Deferred to v0.3
+
+- Re-introduce SBOMs via a post-GoReleaser step in `release.yml` that
+  runs Syft separately and uploads the SBOMs to the release with
+  `gh release upload` — keeping them out of `dist/` during the checksum
+  step so they don't end up in `SHA256SUMS`.
+
+### Everything else from v0.2.0 + v0.2.1
+
+Apart from the SBOM regression, this release is exactly what v0.2.0 +
+v0.2.1 shipped. See the entries below for the full changeset (breaking
+changes, security fixes, new features).
+
+## [0.2.1] — 2026-06-17 — ⚠️ BROKEN, never on Registry
+
+Docs-only patch over v0.2.0: rotated the `SECURITY.md` GPG release-key
+fingerprint to the v2 key (`CFFA…B507`) so manual signature
+verification matches the actual signing key. **Never indexed by the
+Terraform Registry** — see v0.2.2 for the SBOM-related root cause. The
+GitHub Release was deleted; the tag was deleted.
+
+## [0.2.0] — 2026-06-17 — ⚠️ BROKEN, never on Registry
+
+**Never indexed by the Terraform Registry — see v0.2.2 for the root
+cause.** The GitHub Release was deleted; the tag was deleted. The
+content below describes what the release would have shipped; v0.2.2 is
+functionally identical and is the canonical first v0.2 release.
 
 A consolidation release driven by the three-persona security/UX review
 (see `reviews/` in the repo). Closes the four critical findings from
@@ -209,5 +255,7 @@ Initial release.
 - **`ipmitool sdr list` is slow on iDRAC6** (~33 s). Default
   `timeout_seconds` is 60.
 
+[0.2.2]: https://github.com/markddavidoff/terraform-provider-ipmitool/releases/tag/v0.2.2
+[0.2.1]: https://github.com/markddavidoff/terraform-provider-ipmitool/releases/tag/v0.2.1
 [0.2.0]: https://github.com/markddavidoff/terraform-provider-ipmitool/releases/tag/v0.2.0
 [0.1.0]: https://github.com/markddavidoff/terraform-provider-ipmitool/releases/tag/v0.1.0
