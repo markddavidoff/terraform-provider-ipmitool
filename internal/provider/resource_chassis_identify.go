@@ -3,7 +3,6 @@ package provider
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -27,7 +26,6 @@ type chassisIdentifyModel struct {
 	DurationSeconds types.Int64  `tfsdk:"duration_seconds"`
 	Indefinite      types.Bool   `tfsdk:"indefinite"`
 	OffOnDestroy    types.Bool   `tfsdk:"off_on_destroy"`
-	LastUpdated     types.String `tfsdk:"last_updated"`
 	ID              types.String `tfsdk:"id"`
 }
 
@@ -65,7 +63,6 @@ func (r *chassisIdentifyResource) Schema(_ context.Context, _ resource.SchemaReq
 				Description: "If true (default), `terraform destroy` clears the LED. Set false to leave " +
 					"the LED in whatever state the BMC last ran.",
 			},
-			"last_updated": schema.StringAttribute{Computed: true},
 			"id":           schema.StringAttribute{Computed: true},
 		},
 	}
@@ -116,7 +113,6 @@ func (r *chassisIdentifyResource) writeFromPlan(ctx context.Context, plan *chass
 	}
 	plan.DurationSeconds = types.Int64Value(int64(duration))
 	plan.Indefinite = types.BoolValue(indefinite)
-	plan.LastUpdated = types.StringValue(time.Now().UTC().Format(time.RFC3339))
 	plan.ID = types.StringValue(r.idFor(r.overrideFromPlan(*plan)))
 	return nil
 }

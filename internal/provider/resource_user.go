@@ -3,7 +3,6 @@ package provider
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -41,7 +40,6 @@ type userModel struct {
 	Enabled           types.Bool   `tfsdk:"enabled"`
 	Channel           types.Int64  `tfsdk:"channel"`
 	ForceLockoutRisk  types.Bool   `tfsdk:"force_lockout_risk"`
-	LastUpdated       types.String `tfsdk:"last_updated"`
 	ID                types.String `tfsdk:"id"`
 }
 
@@ -107,7 +105,6 @@ func (r *userResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 				Description: "Set to true to override lockout-safety errors when the plan would " +
 					"disable the connection user (which would lock Terraform out of the BMC).",
 			},
-			"last_updated": schema.StringAttribute{Computed: true},
 			"id":           schema.StringAttribute{Computed: true},
 		},
 	}
@@ -236,7 +233,6 @@ func (r *userResource) Create(ctx context.Context, req resource.CreateRequest, r
 
 	plan.Enabled = types.BoolValue(enabled)
 	plan.Channel = types.Int64Value(channel)
-	plan.LastUpdated = types.StringValue(time.Now().UTC().Format(time.RFC3339))
 	plan.ID = types.StringValue(r.idFor(override, userID, channel))
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -329,7 +325,6 @@ func (r *userResource) Update(ctx context.Context, req resource.UpdateRequest, r
 	}
 	plan.Enabled = types.BoolValue(enabled)
 	plan.Channel = types.Int64Value(channel)
-	plan.LastUpdated = types.StringValue(time.Now().UTC().Format(time.RFC3339))
 	plan.ID = types.StringValue(r.idFor(override, userID, channel))
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }

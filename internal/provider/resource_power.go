@@ -3,7 +3,6 @@ package provider
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -31,7 +30,6 @@ type powerModel struct {
 	State              types.String `tfsdk:"state"`
 	PowerOffOnDestroy  types.Bool   `tfsdk:"power_off_on_destroy"`
 	CurrentState       types.String `tfsdk:"current_state"`
-	LastUpdated        types.String `tfsdk:"last_updated"`
 	ID                 types.String `tfsdk:"id"`
 }
 
@@ -66,10 +64,6 @@ func (r *powerResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 			"current_state": schema.StringAttribute{
 				Computed:    true,
 				Description: "Observed chassis power state at last read.",
-			},
-			"last_updated": schema.StringAttribute{
-				Computed:    true,
-				Description: "RFC3339 timestamp of the last SetPowerState call.",
 			},
 			"id": schema.StringAttribute{
 				Computed:    true,
@@ -133,7 +127,6 @@ func (r *powerResource) Create(ctx context.Context, req resource.CreateRequest, 
 	status, statusErr := client.GetChassisStatus(ctx)
 	if statusErr != nil {
 		plan.CurrentState = types.StringValue("unknown")
-		plan.LastUpdated = types.StringValue(time.Now().UTC().Format(time.RFC3339))
 		plan.ID = types.StringValue(r.idFor(override))
 		resp.Diagnostics.AddWarning(
 			"power: SetPowerState succeeded but status read-back failed",
@@ -145,7 +138,6 @@ func (r *powerResource) Create(ctx context.Context, req resource.CreateRequest, 
 	}
 
 	plan.CurrentState = types.StringValue(currentStateString(status.PowerOn))
-	plan.LastUpdated = types.StringValue(time.Now().UTC().Format(time.RFC3339))
 	plan.ID = types.StringValue(r.idFor(override))
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -187,7 +179,6 @@ func (r *powerResource) Update(ctx context.Context, req resource.UpdateRequest, 
 	status, statusErr := client.GetChassisStatus(ctx)
 	if statusErr != nil {
 		plan.CurrentState = types.StringValue("unknown")
-		plan.LastUpdated = types.StringValue(time.Now().UTC().Format(time.RFC3339))
 		plan.ID = types.StringValue(r.idFor(override))
 		resp.Diagnostics.AddWarning(
 			"power: SetPowerState succeeded but status read-back failed",
@@ -198,7 +189,6 @@ func (r *powerResource) Update(ctx context.Context, req resource.UpdateRequest, 
 		return
 	}
 	plan.CurrentState = types.StringValue(currentStateString(status.PowerOn))
-	plan.LastUpdated = types.StringValue(time.Now().UTC().Format(time.RFC3339))
 	plan.ID = types.StringValue(r.idFor(override))
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }

@@ -40,4 +40,3 @@ Manage one IPMI user slot (typically slots 1–15). Includes a self-disable guar
 ### Read-Only
 
 - `id` (String) The ID of this resource.
-- `last_updated` (String)

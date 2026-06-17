@@ -3,7 +3,6 @@ package provider
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -31,7 +30,6 @@ type watchdogModel struct {
 	LogEvent       types.Bool   `tfsdk:"log_event"`
 	StartOnApply   types.Bool   `tfsdk:"start_on_apply"`
 	Running        types.Bool   `tfsdk:"running"`
-	LastUpdated    types.String `tfsdk:"last_updated"`
 	ID             types.String `tfsdk:"id"`
 }
 
@@ -83,7 +81,6 @@ func (r *watchdogResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				Computed:    true,
 				Description: "True when the BMC reports a non-zero present countdown and the timer isn't stopped.",
 			},
-			"last_updated": schema.StringAttribute{Computed: true},
 			"id":           schema.StringAttribute{Computed: true},
 		},
 	}
@@ -158,7 +155,6 @@ func (r *watchdogResource) writeFromPlan(ctx context.Context, plan *watchdogMode
 	plan.Stopped = types.BoolValue(current.Stopped)
 	plan.LogEvent = types.BoolValue(current.LogEvent)
 	plan.Running = types.BoolValue(current.Running)
-	plan.LastUpdated = types.StringValue(time.Now().UTC().Format(time.RFC3339))
 	plan.ID = types.StringValue(r.idFor(r.overrideFromPlan(*plan)))
 	return nil
 }

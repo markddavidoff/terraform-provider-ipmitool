@@ -38,5 +38,4 @@ The provider uses the SMS/OS timer-use slot. Set `start_on_apply = true` to issu
 ### Read-Only
 
 - `id` (String) The ID of this resource.
-- `last_updated` (String)
 - `running` (Boolean) True when the BMC reports a non-zero present countdown and the timer isn't stopped.

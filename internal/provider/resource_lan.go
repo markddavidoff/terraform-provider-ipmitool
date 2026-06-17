@@ -3,7 +3,6 @@ package provider
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -42,7 +41,6 @@ type lanModel struct {
 	PrimaryRMCPPort  types.Int64  `tfsdk:"primary_rmcp_port"`
 	MACAddress       types.String `tfsdk:"mac_address"`
 	ForceLockoutRisk types.Bool   `tfsdk:"force_lockout_risk"`
-	LastUpdated      types.String `tfsdk:"last_updated"`
 	ID               types.String `tfsdk:"id"`
 }
 
@@ -120,7 +118,6 @@ func (r *lanResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 				Optional: true,
 				Description: "Set true to override the channel-1 IP/VLAN lockout guard.",
 			},
-			"last_updated": schema.StringAttribute{Computed: true},
 			"id":           schema.StringAttribute{Computed: true},
 		},
 	}
@@ -297,7 +294,6 @@ func (r *lanResource) Create(ctx context.Context, req resource.CreateRequest, re
 		return
 	}
 	r.applyConfigToState(&plan, cfg)
-	plan.LastUpdated = types.StringValue(time.Now().UTC().Format(time.RFC3339))
 	plan.ID = types.StringValue(r.idFor(override, ch))
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -342,7 +338,6 @@ func (r *lanResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		return
 	}
 	r.applyConfigToState(&plan, cfg)
-	plan.LastUpdated = types.StringValue(time.Now().UTC().Format(time.RFC3339))
 	plan.ID = types.StringValue(r.idFor(override, int64(ch)))
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }

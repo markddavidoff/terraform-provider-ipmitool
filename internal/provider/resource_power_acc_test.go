@@ -29,7 +29,6 @@ resource "ipmi_power" "test" {
 					resource.TestCheckResourceAttr("ipmi_power.test", "state", "on"),
 					resource.TestCheckResourceAttr("ipmi_power.test", "current_state", "on"),
 					resource.TestCheckResourceAttrSet("ipmi_power.test", "id"),
-					resource.TestCheckResourceAttrSet("ipmi_power.test", "last_updated"),
 				),
 			},
 			// Second step with same config — should plan as no-op.

@@ -3,7 +3,6 @@ package provider
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -38,7 +37,6 @@ type channelAccessModel struct {
 	PrivilegeLimit   types.String `tfsdk:"privilege_limit"`
 	Persistence      types.String `tfsdk:"persistence"`
 	ForceLockoutRisk types.Bool   `tfsdk:"force_lockout_risk"`
-	LastUpdated      types.String `tfsdk:"last_updated"`
 	ID               types.String `tfsdk:"id"`
 }
 
@@ -105,7 +103,6 @@ func (r *channelAccessResource) Schema(_ context.Context, _ resource.SchemaReque
 				Description: "Set to true to override the channel-1 self-lockout guard. " +
 					"Without it, disabling LAN access on the channel Terraform uses is blocked.",
 			},
-			"last_updated": schema.StringAttribute{Computed: true},
 			"id":           schema.StringAttribute{Computed: true},
 		},
 	}
@@ -228,7 +225,6 @@ func (r *channelAccessResource) Create(ctx context.Context, req resource.CreateR
 	plan.PEFAlerting = types.BoolValue(access.PEFAlerting)
 	plan.PrivilegeLimit = types.StringValue(string(access.PrivilegeLimit))
 	plan.Persistence = types.StringValue(string(persist))
-	plan.LastUpdated = types.StringValue(time.Now().UTC().Format(time.RFC3339))
 	plan.ID = types.StringValue(r.idFor(override, ch))
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -278,7 +274,6 @@ func (r *channelAccessResource) Update(ctx context.Context, req resource.UpdateR
 	plan.PEFAlerting = types.BoolValue(access.PEFAlerting)
 	plan.PrivilegeLimit = types.StringValue(string(access.PrivilegeLimit))
 	plan.Persistence = types.StringValue(string(persist))
-	plan.LastUpdated = types.StringValue(time.Now().UTC().Format(time.RFC3339))
 	plan.ID = types.StringValue(r.idFor(override, int64(ch)))
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }

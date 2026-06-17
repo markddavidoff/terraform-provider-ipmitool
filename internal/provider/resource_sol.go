@@ -3,7 +3,6 @@ package provider
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -31,7 +30,6 @@ type solModel struct {
 	PrivilegeLimit      types.String `tfsdk:"privilege_limit"`
 	ForceAuthentication types.Bool   `tfsdk:"force_authentication"`
 	ForceEncryption     types.Bool   `tfsdk:"force_encryption"`
-	LastUpdated         types.String `tfsdk:"last_updated"`
 	ID                  types.String `tfsdk:"id"`
 }
 
@@ -84,7 +82,6 @@ func (r *solResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 				Description: "Require encrypted SOL payloads. Default true.",
 			},
 
-			"last_updated": schema.StringAttribute{Computed: true},
 			"id":           schema.StringAttribute{Computed: true},
 		},
 	}
@@ -195,7 +192,6 @@ func (r *solResource) Create(ctx context.Context, req resource.CreateRequest, re
 		return
 	}
 	r.applyConfigToState(&plan, cfg)
-	plan.LastUpdated = types.StringValue(time.Now().UTC().Format(time.RFC3339))
 	plan.ID = types.StringValue(r.idFor(override, int64(ch)))
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -235,7 +231,6 @@ func (r *solResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		return
 	}
 	r.applyConfigToState(&plan, cfg)
-	plan.LastUpdated = types.StringValue(time.Now().UTC().Format(time.RFC3339))
 	plan.ID = types.StringValue(r.idFor(override, int64(ch)))
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }

@@ -36,4 +36,3 @@ Only steady states (`on`, `off`) are supported. Imperative actions like `cycle` 
 
 - `current_state` (String) Observed chassis power state at last read.
 - `id` (String) Resource ID — `<host>:<port>` of the managed BMC.
-- `last_updated` (String) RFC3339 timestamp of the last SetPowerState call.

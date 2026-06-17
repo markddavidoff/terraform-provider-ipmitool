@@ -41,4 +41,3 @@ Manage Set Channel Access for one channel — controls whether IPMI-over-LAN is 
 ### Read-Only
 
 - `id` (String) The ID of this resource.
-- `last_updated` (String)

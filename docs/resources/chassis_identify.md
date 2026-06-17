@@ -33,4 +33,3 @@ This is an **imperative resource**: there's no IPMI "get identify duration" comm
 ### Read-Only
 
 - `id` (String) The ID of this resource.
-- `last_updated` (String)

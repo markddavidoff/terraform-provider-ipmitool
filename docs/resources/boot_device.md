@@ -39,4 +39,3 @@ With `persistent = true`, the override survives reboots and standard drift detec
 ### Read-Only
 
 - `id` (String) The ID of this resource.
-- `last_updated` (String)

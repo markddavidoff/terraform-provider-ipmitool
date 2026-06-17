@@ -36,4 +36,3 @@ Manage Serial-over-LAN configuration on one channel. Each set field is written; 
 ### Read-Only
 
 - `id` (String) The ID of this resource.
-- `last_updated` (String)
