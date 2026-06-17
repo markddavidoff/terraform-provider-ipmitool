@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -46,13 +47,16 @@ func (c *ipmitoolClient) run(ctx context.Context, args ...string) (string, error
 	if c.params.CipherSuite != nil {
 		cipher = *c.params.CipherSuite
 	}
+	// Password is handed off via the IPMI_PASSWORD env var (-E flag)
+	// instead of -P on argv. -P leaks the password into `ps`, /proc, and
+	// process accounting. Closes C-1 from the v0.2 security review.
 	common := []string{
 		"-I", c.params.Interface,
 		"-C", strconv.Itoa(cipher),
 		"-H", c.params.Host,
 		"-p", strconv.Itoa(port),
 		"-U", c.params.Username,
-		"-P", c.params.Password,
+		"-E",
 	}
 	full := append(common, args...)
 
@@ -62,6 +66,7 @@ func (c *ipmitoolClient) run(ctx context.Context, args ...string) (string, error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		ctx2, cancel := context.WithTimeout(ctx, timeout)
 		cmd := exec.CommandContext(ctx2, c.binary, full...)
+		cmd.Env = append(os.Environ(), "IPMI_PASSWORD="+c.params.Password)
 		out, err := cmd.Output()
 		cancel()
 		if err == nil {
