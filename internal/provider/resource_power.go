@@ -124,9 +124,23 @@ func (r *powerResource) Create(ctx context.Context, req resource.CreateRequest, 
 		return
 	}
 
-	status, err := client.GetChassisStatus(ctx)
-	if err != nil {
-		resp.Diagnostics.AddError("failed to refresh chassis status after Create", err.Error())
+	// Partial-state recovery (M-3): SetPowerState succeeded but the
+	// read-back fails (network blip, BMC mid-busy). Write state with
+	// current_state = "unknown" so Terraform records the resource as
+	// created — the next refresh recovers the real value. Without this,
+	// the resource would be marked tainted and the next apply would
+	// re-issue SetPowerState, risking a double power transition.
+	status, statusErr := client.GetChassisStatus(ctx)
+	if statusErr != nil {
+		plan.CurrentState = types.StringValue("unknown")
+		plan.LastUpdated = types.StringValue(time.Now().UTC().Format(time.RFC3339))
+		plan.ID = types.StringValue(r.idFor(override))
+		resp.Diagnostics.AddWarning(
+			"power: SetPowerState succeeded but status read-back failed",
+			"Resource created with current_state = \"unknown\". Refresh "+
+				"will recover. Read-back error: "+statusErr.Error(),
+		)
+		resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 		return
 	}
 
@@ -169,9 +183,18 @@ func (r *powerResource) Update(ctx context.Context, req resource.UpdateRequest, 
 		return
 	}
 
-	status, err := client.GetChassisStatus(ctx)
-	if err != nil {
-		resp.Diagnostics.AddError("failed to refresh chassis status after Update", err.Error())
+	// Partial-state recovery (M-3): same pattern as Create.
+	status, statusErr := client.GetChassisStatus(ctx)
+	if statusErr != nil {
+		plan.CurrentState = types.StringValue("unknown")
+		plan.LastUpdated = types.StringValue(time.Now().UTC().Format(time.RFC3339))
+		plan.ID = types.StringValue(r.idFor(override))
+		resp.Diagnostics.AddWarning(
+			"power: SetPowerState succeeded but status read-back failed",
+			"Update wrote current_state = \"unknown\". Refresh will recover. "+
+				"Read-back error: "+statusErr.Error(),
+		)
+		resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 		return
 	}
 	plan.CurrentState = types.StringValue(currentStateString(status.PowerOn))
