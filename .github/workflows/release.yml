@@ -1,8 +1,23 @@
-# Tag-driven release workflow — split into two jobs to limit blast radius
-# of any compromised action: `build` runs unsigned and never sees the GPG
-# secrets; `sign` downloads the build artifact, imports GPG, signs, and
-# publishes. SLSA build provenance is attested in the sign job after the
-# artifacts are finalized so the attestation references the signed bytes.
+# Tag-driven release workflow — pragmatic split into two jobs:
+#
+#   build: validates that the release configuration produces artifacts
+#          successfully, WITHOUT decrypting any GPG material. Runs a
+#          --snapshot release that skips publish/sign/sbom. If this
+#          fails the `sign` job (which needs:) never runs and the GPG
+#          secrets are never injected into the workflow.
+#
+#   sign:  the actual release. Imports GPG, runs the full goreleaser
+#          release flow (build + archive + checksum + sbom + sign +
+#          publish), then attests build provenance via Sigstore.
+#
+# This split limits the blast radius of a compromised action in the
+# build phase: it gets RCE on the runner but can never touch
+# GPG_PRIVATE_KEY / PASSPHRASE because those secrets are scoped to
+# the sign job's env. Note that GoReleaser does not support
+# "build once, sign later" — the sign job re-builds from source.
+# That's a GoReleaser architecture constraint, not a workflow design
+# choice; the protection here is GPG-scope isolation, not artifact-byte
+# isolation.
 #
 # Triggered when a tag matching `v*` is pushed:
 #   git tag -s v0.2.0 -m "v0.2.0"
@@ -38,28 +53,22 @@ jobs:
           go-version-file: 'go.mod'
           cache: true
 
-      # Snapshot build is unsigned; produces the same artifact layout as
-      # a real release so the sign job can sign+publish them as-is.
-      - name: Build (unsigned snapshot)
+      # Snapshot release validates the full chain (build matrix,
+      # archives, checksums) without needing GPG. If this fails the
+      # sign job (needs:) doesn't run.
+      - name: Validate release flow (snapshot, no sign)
         uses: goreleaser/goreleaser-action@5daf1e915a5f0af01ddbcd89a43b8061ff4f1a89  # v7.2.2
         with:
           version: '~> v2'
-          args: release --snapshot --clean --skip=sign,publish,sbom
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
-        with:
-          name: dist
-          path: dist/
-          retention-days: 1
+          args: release --snapshot --clean --skip=publish,sign,sbom
 
   sign:
     needs: build
     runs-on: ubuntu-latest
     permissions:
-      contents: write       # to upload the GitHub Release
-      id-token: write       # for SLSA OIDC attestation
-      attestations: write   # to write the attestation
+      contents: write       # publish the GitHub Release
+      id-token: write       # SLSA OIDC attestation
+      attestations: write   # write the attestation
     steps:
       - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # v6.0.3
         with:
@@ -70,12 +79,6 @@ jobs:
           go-version-file: 'go.mod'
           cache: true
 
-      - name: Download build artifacts
-        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53  # v6.0.0
-        with:
-          name: dist
-          path: dist/
-
       - name: Import GPG key
         id: import_gpg
         uses: crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd  # v7.0.0
@@ -83,13 +86,11 @@ jobs:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.PASSPHRASE }}
 
-      # Real release — skips the build step (artifacts already exist
-      # from the build job) and runs sign + sbom + publish.
-      - name: Sign + Publish
+      - name: Release (build + archive + checksum + sbom + sign + publish)
         uses: goreleaser/goreleaser-action@5daf1e915a5f0af01ddbcd89a43b8061ff4f1a89  # v7.2.2
         with:
           version: '~> v2'
-          args: release --clean --skip=build
+          args: release --clean
         env:
           GPG_FINGERPRINT: ${{ steps.import_gpg.outputs.fingerprint }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
