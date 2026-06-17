@@ -86,8 +86,8 @@ func (d *sensorsDataSource) Read(ctx context.Context, req datasource.ReadRequest
 	}
 	client := d.factory.New(ipmi.ConnectionParams{
 		Host: data.Host.ValueString(), Username: data.Username.ValueString(),
-		Password: data.Password.ValueString(), Port: int(data.Port.ValueInt64()),
-		Interface: data.Interface.ValueString(), CipherSuite: int(data.CipherSuite.ValueInt64()),
+		Password: data.Password.ValueString(), Port: optionalIntPtr(data.Port),
+		Interface: data.Interface.ValueString(), CipherSuite: optionalIntPtr(data.CipherSuite),
 	})
 	sensors, err := client.GetSensors(ctx)
 	if err != nil {

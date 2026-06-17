@@ -129,9 +129,9 @@ func (p *ipmiProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 			Host:        data.Host.ValueString(),
 			Username:    data.Username.ValueString(),
 			Password:    data.Password.ValueString(),
-			Port:        intOr(data.Port, 623),
+			Port:        ipmi.IntPtr(intOr(data.Port, 623)),
 			Interface:   iface,
-			CipherSuite: intOr(data.CipherSuite, 3),
+			CipherSuite: ipmi.IntPtr(intOr(data.CipherSuite, 3)),
 			TimeoutSecs: intOr(data.TimeoutSeconds, 60),
 		},
 	}
@@ -169,4 +169,15 @@ func intOr(v types.Int64, def int) int {
 		return def
 	}
 	return int(v.ValueInt64())
+}
+
+// optionalIntPtr converts a framework Int64 attribute into *int.
+// Returns nil when the attribute is Null or Unknown — distinguishes
+// "user didn't set this" from "user explicitly set to zero".
+func optionalIntPtr(v types.Int64) *int {
+	if v.IsNull() || v.IsUnknown() {
+		return nil
+	}
+	out := int(v.ValueInt64())
+	return &out
 }

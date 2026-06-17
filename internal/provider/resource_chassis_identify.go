@@ -87,16 +87,16 @@ func (r *chassisIdentifyResource) Configure(_ context.Context, req resource.Conf
 func (r *chassisIdentifyResource) overrideFromPlan(p chassisIdentifyModel) ipmi.ConnectionParams {
 	return ipmi.ConnectionParams{
 		Host: p.Host.ValueString(), Username: p.Username.ValueString(),
-		Password: p.Password.ValueString(), Port: int(p.Port.ValueInt64()),
-		Interface: p.Interface.ValueString(), CipherSuite: int(p.CipherSuite.ValueInt64()),
+		Password: p.Password.ValueString(), Port: optionalIntPtr(p.Port),
+		Interface: p.Interface.ValueString(), CipherSuite: optionalIntPtr(p.CipherSuite),
 	}
 }
 
 func (r *chassisIdentifyResource) idFor(override ipmi.ConnectionParams) string {
 	merged := r.factory.Defaults.Merge(override)
-	port := merged.Port
-	if port == 0 {
-		port = 623
+	port := 623
+	if merged.Port != nil {
+		port = *merged.Port
 	}
 	return fmt.Sprintf("%s:%d/identify", merged.Host, port)
 }

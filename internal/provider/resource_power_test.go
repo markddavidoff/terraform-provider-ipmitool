@@ -25,7 +25,7 @@ func TestPowerResource_idFor(t *testing.T) {
 	t.Parallel()
 	r := &powerResource{
 		factory: &ipmi.ClientFactory{
-			Defaults: ipmi.ConnectionParams{Host: "default-host", Port: 623},
+			Defaults: ipmi.ConnectionParams{Host: "default-host", Port: ipmi.IntPtr(623)},
 		},
 	}
 
@@ -44,7 +44,7 @@ func TestPowerResource_idFor(t *testing.T) {
 	})
 
 	t.Run("override port wins", func(t *testing.T) {
-		got := r.idFor(ipmi.ConnectionParams{Host: "h", Port: 6230})
+		got := r.idFor(ipmi.ConnectionParams{Host: "h", Port: ipmi.IntPtr(6230)})
 		if got != "h:6230" {
 			t.Errorf("got %q, want h:6230", got)
 		}

@@ -13,18 +13,26 @@ import "context"
 // ConnectionParams are the per-resource (or provider-default) settings
 // needed to talk to a single BMC. Resources merge their per-resource
 // overrides onto the provider defaults via Merge.
+//
+// Port and CipherSuite are pointers so a per-resource override of zero
+// is distinguishable from "not set" — required for cipher_suite = 0
+// (RMCP+ no-auth) to actually override a non-zero provider default.
 type ConnectionParams struct {
 	Host        string
 	Username    string
 	Password    string
-	Port        int
+	Port        *int
 	Interface   string // "lanplus" / "lan" / "open"
-	CipherSuite int
+	CipherSuite *int
 	TimeoutSecs int
 }
 
-// Merge applies override on top of base. Zero values in override are
-// treated as "not set" — base wins for them.
+// IntPtr returns a pointer to v. Helper for constructing ConnectionParams
+// with literal int values (mostly used by tests and by provider Configure).
+func IntPtr(v int) *int { return &v }
+
+// Merge applies override on top of base. Empty-string and nil-pointer
+// values in override are treated as "not set" — base wins for them.
 func (base ConnectionParams) Merge(override ConnectionParams) ConnectionParams {
 	out := base
 	if override.Host != "" {
@@ -36,13 +44,13 @@ func (base ConnectionParams) Merge(override ConnectionParams) ConnectionParams {
 	if override.Password != "" {
 		out.Password = override.Password
 	}
-	if override.Port != 0 {
+	if override.Port != nil {
 		out.Port = override.Port
 	}
 	if override.Interface != "" {
 		out.Interface = override.Interface
 	}
-	if override.CipherSuite != 0 {
+	if override.CipherSuite != nil {
 		out.CipherSuite = override.CipherSuite
 	}
 	if override.TimeoutSecs != 0 {

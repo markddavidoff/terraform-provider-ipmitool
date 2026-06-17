@@ -38,11 +38,19 @@ func (c *ipmitoolClient) run(ctx context.Context, args ...string) (string, error
 		timeout = 60 * time.Second
 	}
 
+	port := 623
+	if c.params.Port != nil {
+		port = *c.params.Port
+	}
+	cipher := 3
+	if c.params.CipherSuite != nil {
+		cipher = *c.params.CipherSuite
+	}
 	common := []string{
 		"-I", c.params.Interface,
-		"-C", strconv.Itoa(c.params.CipherSuite),
+		"-C", strconv.Itoa(cipher),
 		"-H", c.params.Host,
-		"-p", strconv.Itoa(c.params.Port),
+		"-p", strconv.Itoa(port),
 		"-U", c.params.Username,
 		"-P", c.params.Password,
 	}

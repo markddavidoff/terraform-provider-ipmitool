@@ -13,9 +13,9 @@ func TestConnectionParams_Merge(t *testing.T) {
 		Host:        "192.0.2.10",
 		Username:    "root",
 		Password:    "oldpass",
-		Port:        623,
+		Port:        IntPtr(623),
 		Interface:   "lanplus",
-		CipherSuite: 3,
+		CipherSuite: IntPtr(3),
 		TimeoutSecs: 15,
 	}
 
@@ -30,15 +30,25 @@ func TestConnectionParams_Merge(t *testing.T) {
 		if got.Username != "root" {
 			t.Errorf("Username should be preserved from base, got %q", got.Username)
 		}
-		if got.Port != 623 || got.CipherSuite != 3 {
-			t.Errorf("numeric fields should be preserved: port=%d cipher=%d", got.Port, got.CipherSuite)
+		if got.Port == nil || *got.Port != 623 || got.CipherSuite == nil || *got.CipherSuite != 3 {
+			t.Errorf("numeric fields should be preserved: port=%v cipher=%v", got.Port, got.CipherSuite)
 		}
 	})
 
-	t.Run("zero override returns base", func(t *testing.T) {
+	t.Run("nil-pointer override returns base", func(t *testing.T) {
 		got := base.Merge(ConnectionParams{})
-		if got != base {
-			t.Errorf("zero override should not change base, got %+v", got)
+		if got.Host != base.Host || got.Username != base.Username ||
+			got.Password != base.Password || got.Interface != base.Interface ||
+			got.TimeoutSecs != base.TimeoutSecs ||
+			got.Port != base.Port || got.CipherSuite != base.CipherSuite {
+			t.Errorf("nil override should not change base, got %+v", got)
+		}
+	})
+
+	t.Run("explicit zero cipher overrides non-zero base", func(t *testing.T) {
+		got := base.Merge(ConnectionParams{CipherSuite: IntPtr(0)})
+		if got.CipherSuite == nil || *got.CipherSuite != 0 {
+			t.Errorf("explicit CipherSuite=0 should override base, got %v", got.CipherSuite)
 		}
 	})
 }

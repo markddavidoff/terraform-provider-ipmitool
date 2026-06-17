@@ -170,16 +170,16 @@ func (r *userResource) connectionUser(p userModel) string {
 func (r *userResource) overrideFromPlan(p userModel) ipmi.ConnectionParams {
 	return ipmi.ConnectionParams{
 		Host: p.Host.ValueString(), Username: p.Username.ValueString(),
-		Password: p.Password.ValueString(), Port: int(p.Port.ValueInt64()),
-		Interface: p.Interface.ValueString(), CipherSuite: int(p.CipherSuite.ValueInt64()),
+		Password: p.Password.ValueString(), Port: optionalIntPtr(p.Port),
+		Interface: p.Interface.ValueString(), CipherSuite: optionalIntPtr(p.CipherSuite),
 	}
 }
 
 func (r *userResource) idFor(override ipmi.ConnectionParams, userID, channel int64) string {
 	merged := r.factory.Defaults.Merge(override)
-	port := merged.Port
-	if port == 0 {
-		port = 623
+	port := 623
+	if merged.Port != nil {
+		port = *merged.Port
 	}
 	return fmt.Sprintf("%s:%d/ch%d/user%d", merged.Host, port, channel, userID)
 }
