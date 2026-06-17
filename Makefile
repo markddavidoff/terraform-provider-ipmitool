@@ -57,17 +57,31 @@ gitleaks: ## Scan for committed secrets (requires gitleaks installed)
 
 .PHONY: docs-validate
 docs-validate: ## Validate Registry docs match schema
-	@go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs validate
+	@go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs validate --provider-name=ipmi
 
 .PHONY: docs
 docs: ## Regenerate Registry docs from schema descriptions (tfplugindocs)
-	@go generate ./...
+	@go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs generate --provider-name=ipmi
 
 .PHONY: install-local
 install-local: build ## Install the provider to ~/.terraform.d for local TF testing
 	@mkdir -p ~/.terraform.d/plugins/registry.terraform.io/$(PROVIDER_NAMESPACE)/$(PROVIDER_NAME)/$(PROVIDER_VERSION)/$(PLUGIN_OS_ARCH)
 	@cp $(PROVIDER_BINARY) ~/.terraform.d/plugins/registry.terraform.io/$(PROVIDER_NAMESPACE)/$(PROVIDER_NAME)/$(PROVIDER_VERSION)/$(PLUGIN_OS_ARCH)/
 	@echo "installed → ~/.terraform.d/plugins/registry.terraform.io/$(PROVIDER_NAMESPACE)/$(PROVIDER_NAME)/$(PROVIDER_VERSION)/$(PLUGIN_OS_ARCH)/"
+
+.PHONY: detect-cipher
+detect-cipher: ## Probe a BMC for the highest-supported RMCP+ cipher. Usage: make detect-cipher HOST=... USER=... [PASS=...]
+	@echo ""
+	@echo "  ╭──── WARNING ────────────────────────────────────────────────╮"
+	@echo "  │ Each failed cipher probe is one failed auth attempt against │"
+	@echo "  │ the BMC. Most BMCs lock the account after 3-5 failed        │"
+	@echo "  │ attempts (iDRAC default: 3 → 10 min lockout).               │"
+	@echo "  │ Run against ONE HOST AT A TIME.                             │"
+	@echo "  ╰─────────────────────────────────────────────────────────────╯"
+	@echo ""
+	@test -n "$(HOST)" || { echo "Usage: make detect-cipher HOST=... USER=... [PASS=...]" >&2; exit 2; }
+	@test -n "$(USER)" || { echo "USER= required" >&2; exit 2; }
+	@scripts/detect-cipher.sh "$(HOST)" "$(USER)" "$${PASS:--}"
 
 ## --- secrets ---
 

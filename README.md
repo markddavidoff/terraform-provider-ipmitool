@@ -32,7 +32,8 @@ connection overrides for multi-host fleets.
 
 ## Requirements
 
-- Terraform ≥ 1.5 (or OpenTofu)
+- Terraform ≥ 1.5 (or OpenTofu). The `ipmi_user` resource specifically
+  requires Terraform ≥ 1.11 for its WriteOnly password attribute.
 - `ipmitool` ≥ 1.8.18 installed on the host that runs `terraform apply`
   - macOS: `brew install ipmitool`
   - Debian / Ubuntu: `apt install ipmitool`
@@ -42,6 +43,32 @@ connection overrides for multi-host fleets.
 The provider detects `ipmitool` at `Configure` time and emits a clear
 install hint if it isn't on `PATH`.
 
+> Canonical Registry source: **`markddavidoff/ipmitool`**. Beware
+> typo-squat namespaces — if your `source =` line is anything else,
+> it's not this provider.
+
+## Cipher suite selection
+
+`cipher_suite` is **required** on the provider block — no safe default.
+The right value depends on your BMC hardware:
+
+| Hardware                  | cipher_suite |
+|---------------------------|--------------|
+| Dell PowerEdge 11G (bare) | `3`          |
+| Dell iDRAC 6              | `3`          |
+| Dell iDRAC 7+             | `17`         |
+| SuperMicro X10/X11/X12    | `17`         |
+| AsRock Rack               | `17`         |
+| Unknown                   | run `make detect-cipher` |
+
+Cipher `3` is RAKP-HMAC-SHA1 + AES-CBC-128. Cipher `17` is
+RAKP-HMAC-SHA256 + AES-CBC-128. Use `17` wherever supported.
+
+⚠️ **Lockout warning when probing:** the `detect-cipher` script makes
+one auth attempt per cipher suite tried. Most BMCs lock the account
+after 3–5 failed attempts (iDRAC default: 3 → 10-min lockout). Run
+against ONE host at a time, with a known-good username/password.
+
 ## Quick start
 
 ```hcl
@@ -49,7 +76,7 @@ terraform {
   required_providers {
     ipmi = {
       source  = "markddavidoff/ipmitool"
-      version = "~> 0.1"
+      version = "~> 0.2"
     }
   }
 }
@@ -58,7 +85,7 @@ provider "ipmi" {
   host         = "192.0.2.10"
   username     = "root"
   password     = var.bmc_password
-  cipher_suite = 3                 # default — works with older Dell BMCs
+  cipher_suite = 17                # see "Cipher suite selection" above
 }
 
 # Read current chassis state.
