@@ -29,8 +29,10 @@ Run `make detect-cipher HOST=... USER=...` against a BMC to probe (warning: each
 ### Optional
 
 - `allow_unauthenticated` (Boolean) Opt-in confirmation that cipher_suite = 0 (no RMCP+ authentication or integrity) is intentional. Setting cipher_suite = 0 without this flag is a Configure-time error. Never set this for production.
+- `health_check` (Boolean) When true, run `mc info` at Configure time using the provider-block defaults to fail fast on unreachable hosts or bad credentials. **Per-resource connection overrides are NOT probed** — those still fail at apply time. Defaults to false (zero network calls at Configure).
 - `host` (String) Default BMC IP or hostname. Resources may override.
 - `interface` (String) ipmitool interface: lanplus (default), lan, or open.
+- `max_concurrent_calls_per_host` (Number) Maximum concurrent ipmitool subprocesses per host. Defaults to 3 (safe for iDRAC6 session table). Raise for modern BMCs: 8 for iDRAC7+, 16+ for SuperMicro X10+ / AsRock Rack.
 - `password` (String, Sensitive) Default IPMI password.
 - `port` (Number) Default IPMI UDP port. Defaults to 623.
 - `timeout_seconds` (Number) Per-call timeout for ipmitool subprocess. Defaults to 60s — older BMCs are slow on `sdr list` (full SDR iteration).

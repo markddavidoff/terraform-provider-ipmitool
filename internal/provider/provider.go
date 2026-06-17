@@ -31,15 +31,16 @@ type ipmiProvider struct {
 
 // providerConfigModel mirrors the provider block schema for tfsdk decode.
 type providerConfigModel struct {
-	Host                     types.String `tfsdk:"host"`
-	Username                 types.String `tfsdk:"username"`
-	Password                 types.String `tfsdk:"password"`
-	Port                     types.Int64  `tfsdk:"port"`
-	Interface                types.String `tfsdk:"interface"`
-	CipherSuite              types.Int64  `tfsdk:"cipher_suite"`
-	TimeoutSeconds           types.Int64  `tfsdk:"timeout_seconds"`
-	AllowUnauthenticated     types.Bool   `tfsdk:"allow_unauthenticated"`
-	MaxConcurrentCallsPerHost types.Int64 `tfsdk:"max_concurrent_calls_per_host"`
+	Host                      types.String `tfsdk:"host"`
+	Username                  types.String `tfsdk:"username"`
+	Password                  types.String `tfsdk:"password"`
+	Port                      types.Int64  `tfsdk:"port"`
+	Interface                 types.String `tfsdk:"interface"`
+	CipherSuite               types.Int64  `tfsdk:"cipher_suite"`
+	TimeoutSeconds            types.Int64  `tfsdk:"timeout_seconds"`
+	AllowUnauthenticated      types.Bool   `tfsdk:"allow_unauthenticated"`
+	MaxConcurrentCallsPerHost types.Int64  `tfsdk:"max_concurrent_calls_per_host"`
+	HealthCheck               types.Bool   `tfsdk:"health_check"`
 }
 
 func (p *ipmiProvider) Metadata(_ context.Context, _ provider.MetadataRequest, resp *provider.MetadataResponse) {
@@ -105,6 +106,15 @@ func (p *ipmiProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp 
 					"host. Defaults to 3 (safe for iDRAC6 session table). " +
 					"Raise for modern BMCs: 8 for iDRAC7+, 16+ for " +
 					"SuperMicro X10+ / AsRock Rack.",
+			},
+			"health_check": schema.BoolAttribute{
+				Optional: true,
+				Description: "When true, run `mc info` at Configure time " +
+					"using the provider-block defaults to fail fast on " +
+					"unreachable hosts or bad credentials. " +
+					"**Per-resource connection overrides are NOT probed** — " +
+					"those still fail at apply time. Defaults to false " +
+					"(zero network calls at Configure).",
 			},
 		},
 	}
@@ -174,6 +184,23 @@ func (p *ipmiProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 			CipherSuite: ipmi.IntPtr(cipher),
 			TimeoutSecs: intOr(data.TimeoutSeconds, 60),
 		},
+	}
+
+	// Optional health probe against the provider-block defaults. Skipped
+	// silently if host is empty (caller intends per-resource overrides for
+	// everything) or if health_check is unset.
+	if data.HealthCheck.ValueBool() && factory.Defaults.Host != "" {
+		probe := factory.New(ipmi.ConnectionParams{})
+		if _, err := probe.GetBMCInfo(ctx); err != nil {
+			resp.Diagnostics.AddError(
+				"ipmi: health check failed",
+				"Configure-time `mc info` probe failed against "+
+					factory.Defaults.Host+": "+err.Error()+". Verify host, "+
+					"port, username, password, cipher_suite, and network "+
+					"reachability. Set health_check = false to skip this probe.",
+			)
+			return
+		}
 	}
 
 	resp.DataSourceData = factory
