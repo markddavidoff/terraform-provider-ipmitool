@@ -60,13 +60,19 @@ signs:
       - "--detach-sign"
       - "${artifact}"
 
-# SBOM generation via the built-in Syft integration. Produces one
-# .spdx.json per archive; uploaded alongside the zips by the release
-# step so adopters can scan with Trivy / Snyk / etc.
-sboms:
-  - artifacts: archive
-    documents:
-      - "${artifact}.spdx.json"
+# SBOM generation is intentionally OFF for v0.2.x.
+#
+# GoReleaser v2 unconditionally includes SBOMs (.spdx.json) in
+# SHA256SUMS — there's no `checksum.disable_sbom` flag. The Terraform
+# Registry's release-import flow rejects any SHA256SUMS entry it doesn't
+# have a slot for, so the extra .spdx.json rows cause Registry indexing
+# to fail with "missing files in request body" (v0.2.0 and v0.2.1 hit
+# this and never published).
+#
+# Re-add SBOMs in v0.3 via a post-GoReleaser step in release.yml that
+# runs Syft separately and uploads the SBOMs to the release with
+# `gh release upload` — keeping them out of dist/ during the checksum
+# step.
 
 release:
   extra_files:
