@@ -410,3 +410,15 @@ func (r *lanResource) applyConfigToState(m *lanModel, cfg *ipmi.LanConfig) {
 		m.PrimaryRMCPPort = types.Int64Null()
 	}
 }
+
+func (r *lanResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	host, port, channel, err := parseHostPortChannelID(req.ID)
+	if err != nil {
+		resp.Diagnostics.AddError("invalid import ID", err.Error())
+		return
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("host"), host)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("port"), int64(port))...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("channel"), int64(channel))...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
+}

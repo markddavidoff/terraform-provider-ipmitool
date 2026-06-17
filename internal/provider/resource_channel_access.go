@@ -278,3 +278,15 @@ func (r *channelAccessResource) Update(ctx context.Context, req resource.UpdateR
 // the resource from state leaves BMC settings alone.
 func (r *channelAccessResource) Delete(_ context.Context, _ resource.DeleteRequest, _ *resource.DeleteResponse) {
 }
+
+func (r *channelAccessResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	host, port, channel, err := parseHostPortChannelID(req.ID)
+	if err != nil {
+		resp.Diagnostics.AddError("invalid import ID", err.Error())
+		return
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("host"), host)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("port"), int64(port))...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("channel"), int64(channel))...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
+}

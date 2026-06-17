@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -174,4 +175,15 @@ func (r *chassisIdentifyResource) Delete(ctx context.Context, req resource.Delet
 	if err := client.ChassisIdentify(ctx, 0, false); err != nil {
 		resp.Diagnostics.AddError("failed to clear chassis identify on destroy", err.Error())
 	}
+}
+
+func (r *chassisIdentifyResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	host, port, err := parseHostPortID(req.ID)
+	if err != nil {
+		resp.Diagnostics.AddError("invalid import ID", err.Error())
+		return
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("host"), host)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("port"), int64(port))...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
 }

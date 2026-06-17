@@ -370,3 +370,16 @@ func (r *userResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 		resp.Diagnostics.AddError("failed to disable user on destroy", err.Error())
 	}
 }
+
+func (r *userResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	host, port, channel, userID, err := parseHostPortChannelUserID(req.ID)
+	if err != nil {
+		resp.Diagnostics.AddError("invalid import ID", err.Error())
+		return
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("host"), host)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("port"), int64(port))...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("channel"), int64(channel))...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("user_id"), int64(userID))...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
+}
