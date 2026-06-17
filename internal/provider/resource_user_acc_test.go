@@ -27,11 +27,12 @@ func TestAccUserResource_basic(t *testing.T) {
 			{
 				Config: providerHCL + `
 resource "ipmi_user" "tf_test" {
-  user_id       = 4
-  name          = "tftest"
-  user_password = "verylongtestpass1!"
-  privilege     = "user"
-  enabled       = true
+  user_id                  = 4
+  name                     = "tftest"
+  user_password_wo         = "verylongtestpass1!"
+  user_password_wo_version = "1"
+  privilege                = "user"
+  enabled                  = true
 }
 `,
 				Check: resource.ComposeAggregateTestCheckFunc(
@@ -47,11 +48,12 @@ resource "ipmi_user" "tf_test" {
 			{
 				Config: providerHCL + `
 resource "ipmi_user" "tf_test" {
-  user_id       = 4
-  name          = "tftest"
-  user_password = "verylongtestpass1!"
-  privilege     = "user"
-  enabled       = true
+  user_id                  = 4
+  name                     = "tftest"
+  user_password_wo         = "verylongtestpass1!"
+  user_password_wo_version = "1"
+  privilege                = "user"
+  enabled                  = true
 }
 `,
 				PlanOnly: true,
@@ -74,11 +76,12 @@ func TestAccUserResource_selfDisableBlocked(t *testing.T) {
 			{
 				Config: providerHCL + `
 resource "ipmi_user" "self" {
-  user_id       = 2
-  name          = var.ipmi_user
-  user_password = "ignored"
-  privilege     = "administrator"
-  enabled       = false
+  user_id                  = 2
+  name                     = var.ipmi_user
+  user_password_wo         = "ignored"
+  user_password_wo_version = "1"
+  privilege                = "administrator"
+  enabled                  = false
 }
 `,
 				ExpectError: regexpSelfDisable,

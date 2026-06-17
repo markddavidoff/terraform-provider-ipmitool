@@ -4,14 +4,17 @@ page_title: "ipmi_user Resource - ipmi"
 subcategory: ""
 description: |-
   Manage one IPMI user slot (typically slots 1–15). Includes a self-disable guard: if the user being modified matches the connection username and the plan would disable the slot, apply errors unless TF_IPMI_ALLOW_LOCKOUT=1 is set in the runner environment for the apply.
-  Note: user_password is write-only — the BMC does not return it on reads, so the provider cannot detect out-of-band password changes.
+  Password handling: user_password_wo is WriteOnly — the secret is provided to the provider at apply time but never persisted to Terraform state. The companion user_password_wo_version (a normal attribute) is the trigger: whenever its value changes between plan and prior state, the provider sends the current user_password_wo to the BMC. Bump the version (e.g. "1" → "2", or a hash of the secret) to rotate.
+  Terraform version: this resource requires Terraform >= 1.11 for WriteOnly attribute support. Other resources in this provider still work on Terraform >= 1.5.
 ---
 
 # ipmi_user (Resource)
 
 Manage one IPMI user slot (typically slots 1–15). Includes a self-disable guard: if the user being modified matches the connection `username` and the plan would disable the slot, apply errors unless `TF_IPMI_ALLOW_LOCKOUT=1` is set in the runner environment for the apply.
 
-**Note:** `user_password` is write-only — the BMC does not return it on reads, so the provider cannot detect out-of-band password changes.
+**Password handling:** `user_password_wo` is **WriteOnly** — the secret is provided to the provider at apply time but never persisted to Terraform state. The companion `user_password_wo_version` (a normal attribute) is the trigger: whenever its value changes between plan and prior state, the provider sends the current `user_password_wo` to the BMC. Bump the version (e.g. `"1"` → `"2"`, or a hash of the secret) to rotate.
+
+**Terraform version:** this resource requires Terraform >= 1.11 for WriteOnly attribute support. Other resources in this provider still work on Terraform >= 1.5.
 
 
 
@@ -20,10 +23,13 @@ Manage one IPMI user slot (typically slots 1–15). Includes a self-disable guar
 
 ### Required
 
+> **NOTE**: [Write-only arguments](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments) are supported in Terraform 1.11 and later.
+
 - `name` (String) Username string written to the slot.
 - `privilege` (String) Privilege level on this channel: `callback`, `user`, `operator`, `administrator`, `oem`, or `no_access`.
 - `user_id` (Number) User slot ID, typically 1–15. Slot 1 is reserved/anonymous on most BMCs.
-- `user_password` (String, Sensitive) Password set on the slot. Write-only — never returned by Read.
+- `user_password_wo` (String, Sensitive, [Write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments)) Password set on the BMC user slot. **WriteOnly** — the value lives only in config and is never persisted to state (requires Terraform >= 1.11). Sent to the BMC whenever `user_password_wo_version` changes.
+- `user_password_wo_version` (String) Trigger for `user_password_wo`. Bump this string when you want the provider to rewrite the BMC user-slot password with the current `user_password_wo` value. Persisted to state (unlike the password itself).
 
 ### Optional
 
