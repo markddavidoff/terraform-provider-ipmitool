@@ -1,6 +1,6 @@
 module github.com/markddavidoff/terraform-provider-ipmitool
 
-go 1.25.8
+go 1.26.0
 
 toolchain go1.26.4
 
@@ -11,7 +11,7 @@ require (
 	github.com/hashicorp/terraform-plugin-log v0.10.0
 	github.com/hashicorp/terraform-plugin-testing v1.16.0
 	golang.org/x/vuln v1.4.0
-	honnef.co/go/tools v0.7.0
+	honnef.co/go/tools v0.8.1
 )
 
 require (
